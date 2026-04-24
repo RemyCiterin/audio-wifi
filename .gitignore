@@ -3,3 +3,4 @@ bsim
 log.txt
 recorded.wav
 samples.hex
+scripts/__pycache__
