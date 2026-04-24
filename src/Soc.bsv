@@ -13,6 +13,7 @@ import Constants::*;
 import Header::*;
 import CORDIC::*;
 
+import Equalisation::*;
 import Detection::*;
 
 interface SOC_IFC;
@@ -31,7 +32,7 @@ module mkSoc(SOC_IFC);
 
   FFT_IFC#(FFT_SIZE) fft <- mkStreamFFT64;
 
-  Vector#(FFT_SIZE, C16) vector = replicate(0);
+  Vector#(FFT_SIZE, Cmplx) vector = replicate(0);
 
   for (Integer i = 0; i < valueof(FFT_SIZE); i = i + 1) begin
     Real rPart = cos(2.0 * pi * fromInteger(i) / fromInteger(valueof(FFT_SIZE)));
@@ -61,14 +62,14 @@ module mkSoc(SOC_IFC);
   //  action
   //    fft.deq;
   //    for (Integer i=0; i < valueof(FFT_SIZE); i = i + 1) begin
-  //      $write(formatF16(fft.response[i].rel), ", ");
-  //      $write(formatF16(fft.response[i].img));
+  //      $write(formatFxpt(fft.response[i].rel), ", ");
+  //      $write(formatFxpt(fft.response[i].img));
   //      $display;
   //    end
   //  endaction
   //endseq);
 
-  F16 x = 0;
+  Fxpt x = 0;
   for (Integer i=0; i < valueof(FFT_SIZE); i = i + 1) begin
     x = x + fft.response[i].rel + fft.response[i].img;
   end

@@ -3,8 +3,8 @@ import Complex::*;
 
 typedef 64 FFT_SIZE;
 
-typedef FixedPoint#(16,16) F16;
-typedef Complex#(F16) C16;
+typedef FixedPoint#(16,16) Fxpt;
+typedef Complex#(Fxpt) Cmplx;
 
 typedef enum {
   BPSK = 1,

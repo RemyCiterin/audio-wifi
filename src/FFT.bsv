@@ -13,14 +13,14 @@ import ClientServer::*;
 
 import Constants::*;
 
-function Fmt formatF16(F16 x) provisos(Bits#(F16,a));
+function Fmt formatFxpt(Fxpt x) provisos(Bits#(Fxpt,a));
   //return $format(fshow(Int#(a)'(unpack(pack(x)))));
 
   return $format("%d.%d", fshow(fxptGetInt(x)), fshow((fxptGetFrac(x)*100) >> 16));
 endfunction
 
 // 64-th unit roots: e^(2j * PI * k / 64) for k in [0, 63]
-C16 unit_circle_64[64] = {
+Cmplx unit_circle_64[64] = {
   cmplx(1.0, 0.0),cmplx(0.9951847266721969, 0.0980171403295606),
   cmplx(0.9807852804032304, 0.19509032201612825),cmplx(0.9569403357322088, 0.29028467725446233),
   cmplx(0.9238795325112867, 0.3826834323650898),cmplx(0.881921264348355, 0.47139673682599764),
@@ -55,12 +55,12 @@ C16 unit_circle_64[64] = {
   cmplx(0.9807852804032303, -0.19509032201612872),cmplx(0.9951847266721969, -0.0980171403295605)
 };
 
-function C16 complexTimesI(C16 x);
+function Cmplx complexTimesI(Cmplx x);
   return Complex{rel: - x.img, img: x.rel};
 endfunction
 
 // return the e^(2*i*pi*k/n) with k and n integers
-function C16 complexExp(Integer k, Integer n);
+function Cmplx complexExp(Integer k, Integer n);
   Real rPart = cos(2.0 * pi * fromInteger(k) / fromInteger(n));
   Real iPart = sin(2.0 * pi * fromInteger(k) / fromInteger(n));
 
@@ -72,7 +72,7 @@ endfunction
 
 // return the `x * e^(2*i*pi*k/n)` with `k` and `n` integers, also perform some optimisations
 // for specific values of `k/n` (0, 1/2, 1/4, 3/4, 1/8, 3/8, 5/8, 7/8)
-function C16 timesComplexExp(C16 x, Integer k, Integer n);
+function Cmplx timesComplexExp(Cmplx x, Integer k, Integer n);
   if (k < 0) k = (k % n) + n;
   else k = k % n;
 
@@ -97,26 +97,26 @@ endfunction
 
 interface FFT_IFC#(numeric type n);
   (* always_ready *) method Bool canEnq();
-  method Action enq( Vector#(n, C16) in );
+  method Action enq( Vector#(n, Cmplx) in );
 
   (* always_ready *) method Bool valid;
-  (* always_ready *) method Vector#(n, C16) response;
+  (* always_ready *) method Vector#(n, Cmplx) response;
   method Action deq;
 endinterface
 
 module mkDFT#(Bool inverse) (FFT_IFC#(n));
   Reg#(Bool) idle[2] <- mkCReg(2, True);
-  Reg#(Vector#(n, C16)) state <- mkRegU;
+  Reg#(Vector#(n, Cmplx)) state <- mkRegU;
 
   method canEnq = idle[1];
-  method Action enq(Vector#(n, C16) data) if (idle[1]);
+  method Action enq(Vector#(n, Cmplx) data) if (idle[1]);
     idle[1] <= False;
     state <= data;
   endmethod
 
   method valid = !idle[0];
-  method Vector#(n, C16) response;
-    Vector#(n, C16) out = replicate(0);
+  method Vector#(n, Cmplx) response;
+    Vector#(n, Cmplx) out = replicate(0);
 
     for (Integer i=0; i < valueof(n); i = i + 1) begin
       for (Integer j=0; j < valueof(n); j = j + 1) begin
@@ -142,19 +142,19 @@ endmodule
 (* synthesize *)
 module mkFFT4#(Bool inverse) (FFT_IFC#(4));
   Reg#(Bool) idle[2] <- mkCReg(2, True);
-  Reg#(Vector#(4, C16)) state <- mkRegU;
+  Reg#(Vector#(4, Cmplx)) state <- mkRegU;
 
   method canEnq = idle[1];
-  method Action enq(Vector#(4, C16) data) if (idle[1]);
+  method Action enq(Vector#(4, Cmplx) data) if (idle[1]);
     idle[1] <= False;
     state <= data;
   endmethod
 
   method valid = !idle[0];
-  method Vector#(4, C16) response;
-    Vector#(4, C16) out = newVector;
+  method Vector#(4, Cmplx) response;
+    Vector#(4, Cmplx) out = newVector;
 
-    C16 j = inverse ? cmplx(0,-1) : cmplx(0, 1);
+    Cmplx j = inverse ? cmplx(0,-1) : cmplx(0, 1);
     out[0] = state[0] + state[1] + state[2] + state[3];
     if (inverse) out[1] = state[0] + complexTimesI(state[1]) - state[2] - complexTimesI(state[3]);
     else out[1] = state[0] - complexTimesI(state[1]) - state[2] + complexTimesI(state[3]);
@@ -173,10 +173,10 @@ endmodule
 module mkCyclicFFTRadix4#(
   FFT_IFC#(n) fft
 ) (FFT_IFC#(TMul#(4, n)));
-  Reg#(Vector#(4, Vector#(n, C16))) output_buffer <- mkRegU;
+  Reg#(Vector#(4, Vector#(n, Cmplx))) output_buffer <- mkRegU;
   Reg#(Bit#(3)) output_state[2] <- mkCReg(2, 0);
 
-  Reg#(Vector#(4, Vector#(n, C16))) input_buffer <- mkRegU;
+  Reg#(Vector#(4, Vector#(n, Cmplx))) input_buffer <- mkRegU;
   Reg#(Bit#(3)) input_state[2] <- mkCReg(2, 0);
 
   rule send_input if (input_state[0] != 0 && fft.canEnq);
@@ -184,7 +184,7 @@ module mkCyclicFFTRadix4#(
     input_state[0] <= input_state[0] - 1;
   endrule
 
-  Vector#(4, Vector#(n, C16)) factors = replicate(replicate(0));
+  Vector#(4, Vector#(n, Cmplx)) factors = replicate(replicate(0));
 
   for (Integer i=0; i < valueof(n); i = i + 1) begin
     factors[0][i] = 1;
@@ -193,7 +193,7 @@ module mkCyclicFFTRadix4#(
     factors[3][i] = complexExp(- 3 * i, 4 * valueof(n));
   end
 
-  FIFOF#(Vector#(n, C16)) fft_output <- mkPipelineFIFOF;
+  FIFOF#(Vector#(n, Cmplx)) fft_output <- mkPipelineFIFOF;
 
   rule from_fft;
     fft_output.enq(fft.response);
@@ -201,7 +201,7 @@ module mkCyclicFFTRadix4#(
   endrule
 
   rule receive_output if (output_state[1] != 4);
-    Vector#(n, C16) out = fft_output.first;
+    Vector#(n, Cmplx) out = fft_output.first;
 
     for (Integer i=0; i < valueof(n); i = i + 1) begin
       out[i] = factors[output_state[1]][i] * out[i];
@@ -213,10 +213,10 @@ module mkCyclicFFTRadix4#(
   endrule
 
   method canEnq = input_state[1] == 0;
-  method Action enq(Vector#(TMul#(4,n), C16) data) if (input_state[1] == 0);
+  method Action enq(Vector#(TMul#(4,n), Cmplx) data) if (input_state[1] == 0);
     input_state[1] <= 4;
 
-    Vector#(4, Vector#(n, C16)) in = replicate(replicate(0));
+    Vector#(4, Vector#(n, Cmplx)) in = replicate(replicate(0));
     for (Integer i=0; i < valueof(n); i = i + 1) begin
       in[3][i] = data[4 * i + 0];
       in[2][i] = data[4 * i + 1];
@@ -229,14 +229,14 @@ module mkCyclicFFTRadix4#(
 
   method valid = output_state[0] == 4;
 
-  method Vector#(TMul#(4,n), C16) response;
-    Vector#(TMul#(4,n), C16) out = replicate(0);
+  method Vector#(TMul#(4,n), Cmplx) response;
+    Vector#(TMul#(4,n), Cmplx) out = replicate(0);
 
     for (Integer i=0; i < valueof(n); i = i + 1) begin
-      C16 x0 = output_buffer[0][i];
-      C16 x1 = output_buffer[1][i];
-      C16 x2 = output_buffer[2][i];
-      C16 x3 = output_buffer[3][i];
+      Cmplx x0 = output_buffer[0][i];
+      Cmplx x1 = output_buffer[1][i];
+      Cmplx x2 = output_buffer[2][i];
+      Cmplx x3 = output_buffer[3][i];
 
       out[0 * valueof(n) + i] = x0 + x1 + x2 + x3;
       out[1 * valueof(n) + i] = x0 - complexTimesI(x1) - x2 + complexTimesI(x3);
@@ -259,16 +259,16 @@ module mkRowColFFT#(
 )(FFT_IFC#(TMul#(n, m)));
   Reg#(Bit#(TLog#(n))) input_row <- mkReg(0);
   Reg#(Bit#(n)) input_valid[2] <- mkCReg(2, 0);
-  Reg#(Vector#(n, Vector#(m, C16))) input_buf <- mkRegU;
+  Reg#(Vector#(n, Vector#(m, Cmplx))) input_buf <- mkRegU;
 
   Reg#(Vector#(n, Vector#(m, Bool))) tmp_valid[2] <- mkCReg(2, replicate(replicate(False)));
-  Reg#(Vector#(n, Vector#(m, C16))) tmp_buf <- mkRegU;
+  Reg#(Vector#(n, Vector#(m, Cmplx))) tmp_buf <- mkRegU;
   Reg#(Bit#(TLog#(n))) tmp_row <- mkReg(0);
   Reg#(Bit#(TLog#(m))) tmp_col <- mkReg(0);
 
   Reg#(Bit#(TLog#(m))) output_row <- mkReg(0);
   Reg#(Bit#(m)) output_valid[2] <- mkCReg(2, 0);
-  Reg#(Vector#(m, Vector#(n, C16))) output_buf <- mkRegU;
+  Reg#(Vector#(m, Vector#(n, Cmplx))) output_buf <- mkRegU;
 
   rule input_to_fft if (input_valid[0][input_row] == 1);
     input_row <= input_row == fromInteger(valueof(n) - 1) ? 0 : input_row + 1;
@@ -283,7 +283,7 @@ module mkRowColFFT#(
     fft_m.deq;
   endrule
 
-  Vector#(n, Vector#(m, C16)) twiddles = replicate(replicate(0));
+  Vector#(n, Vector#(m, Cmplx)) twiddles = replicate(replicate(0));
 
   for (Integer i=0; i < valueof(n); i = i + 1) begin
     for (Integer j=0; j < valueof(m); j = j + 1) begin
@@ -295,7 +295,7 @@ module mkRowColFFT#(
   rule tmp_to_fft if (transpose(tmp_valid[0])[tmp_col] == replicate(True));
     tmp_col <= tmp_col == fromInteger(valueof(m) - 1) ? 0 : tmp_col + 1;
 
-    Vector#(n, C16) col = replicate(0);
+    Vector#(n, Cmplx) col = replicate(0);
     Vector#(n, Vector#(m, Bool)) valid = tmp_valid[0];
     for (Integer i=0; i < valueof(n); i = i + 1) begin
       col[i] = tmp_buf[i][tmp_col] * twiddles[i][tmp_col];
@@ -315,7 +315,7 @@ module mkRowColFFT#(
 
   method canEnq = input_valid[1] == 0;
 
-  method Action enq(Vector#(TMul#(n,m), C16) in) if (input_valid[1] == 0);
+  method Action enq(Vector#(TMul#(n,m), Cmplx) in) if (input_valid[1] == 0);
     input_buf <= transpose(unpack(pack(in)));
     input_valid[1] <= '1;
   endmethod
@@ -339,11 +339,11 @@ module mkPipelineFFTRadix4#(
 
   method canEnq = fft0.canEnq && fft1.canEnq && fft2.canEnq && fft3.canEnq;
 
-  method Action enq(Vector#(TMul#(4, n), C16) in);
-    Vector#(n, C16) in0 = replicate(0);
-    Vector#(n, C16) in1 = replicate(0);
-    Vector#(n, C16) in2 = replicate(0);
-    Vector#(n, C16) in3 = replicate(0);
+  method Action enq(Vector#(TMul#(4, n), Cmplx) in);
+    Vector#(n, Cmplx) in0 = replicate(0);
+    Vector#(n, Cmplx) in1 = replicate(0);
+    Vector#(n, Cmplx) in2 = replicate(0);
+    Vector#(n, Cmplx) in3 = replicate(0);
 
     for (Integer i=0; i < valueof(n); i = i + 1) begin
       in0[i] = in[4 * i + 0];
@@ -360,14 +360,14 @@ module mkPipelineFFTRadix4#(
 
   method Bool valid = fft0.valid && fft1.valid && fft2.valid && fft3.valid;
 
-  method Vector#(TMul#(4, n), C16) response;
-    Vector#(TMul#(4, n), C16) out = replicate(0);
+  method Vector#(TMul#(4, n), Cmplx) response;
+    Vector#(TMul#(4, n), Cmplx) out = replicate(0);
 
     for (Integer i=0; i < valueof(n); i = i + 1) begin
-      C16 x0 = fft0.response[i];
-      C16 x1 = fft1.response[i] * complexExp(- 1 * i, 4 * valueof(n));
-      C16 x2 = fft2.response[i] * complexExp(- 2 * i, 4 * valueof(n));
-      C16 x3 = fft3.response[i] * complexExp(- 3 * i, 4 * valueof(n));
+      Cmplx x0 = fft0.response[i];
+      Cmplx x1 = fft1.response[i] * complexExp(- 1 * i, 4 * valueof(n));
+      Cmplx x2 = fft2.response[i] * complexExp(- 2 * i, 4 * valueof(n));
+      Cmplx x3 = fft3.response[i] * complexExp(- 3 * i, 4 * valueof(n));
 
       out[0 * valueof(n) + i] = x0 + x1 + x2 + x3;
       out[1 * valueof(n) + i] = x0 - complexTimesI(x1) - x2 + complexTimesI(x3);
@@ -389,17 +389,17 @@ endmodule
 module mkStreamFFT#(Bool inverse) (FFT_IFC#(n));
   Integer n = valueof(n);
 
-  Server#(C16, C16) stages[log2(n)];
+  Server#(Cmplx, Cmplx) stages[log2(n)];
   for (Integer stage=0; stage < log2(n); stage = stage + 1) begin
     stages[stage] <- mkStageStreamFFT(inverse, 2 ** stage);
   end
 
   Reg#(Bool) input_valid[2] <- mkCReg(2, False);
   Reg#(Bit#(TLog#(n))) input_index <- mkReg(0);
-  Reg#(Vector#(n, C16)) input_buffer <- mkRegU;
+  Reg#(Vector#(n, Cmplx)) input_buffer <- mkRegU;
 
   Reg#(Bit#(TLog#(TAdd#(n, 1)))) output_index[2] <- mkCReg(2, fromInteger(0));
-  Reg#(Vector#(n, C16)) output_buffer <- mkRegU;
+  Reg#(Vector#(n, Cmplx)) output_buffer <- mkRegU;
 
   rule send_input if (input_valid[0]);
     stages[0].request.put(input_buffer[reverseBits(input_index)]);
@@ -421,7 +421,7 @@ module mkStreamFFT#(Bool inverse) (FFT_IFC#(n));
   endrule
 
   method canEnq = !input_valid[1];
-  method Action enq (Vector#(n, C16) data) if (!input_valid[1]);
+  method Action enq (Vector#(n, Cmplx) data) if (!input_valid[1]);
     input_valid[1] <= True;
     input_buffer <= data;
   endmethod
@@ -454,23 +454,23 @@ module mkShiftReg#(Integer n, function t init(Integer i)) (ShiftReg#(t)) proviso
   endmethod
 endmodule
 
-module mkStageStreamFFT#(Bool inverse, Integer n) (Server#(C16, C16));
-  FIFOF#(C16) requests <- mkPipelineFIFOF;
-  FIFOF#(C16) responses <- mkBypassFIFOF;
+module mkStageStreamFFT#(Bool inverse, Integer n) (Server#(Cmplx, Cmplx));
+  FIFOF#(Cmplx) requests <- mkPipelineFIFOF;
+  FIFOF#(Cmplx) responses <- mkBypassFIFOF;
 
   if (n > 2**16) errorM("Stream FFT doesn't support more than 64K samples");
   Reg#(Bit#(16)) flush_counter <- mkReg(fromInteger(n));
   Reg#(Bit#(16)) counter <- mkReg(0);
   Reg#(Bit#(1)) stage <- mkReg(0);
 
-  function C16 computeTwiddle(Integer i);
+  function Cmplx computeTwiddle(Integer i);
     if (inverse) return complexExp(i, 2*n);
     else return complexExp(-i, 2*n);
   endfunction
-  ShiftReg#(C16) twiddles <- mkShiftReg(n, computeTwiddle);
+  ShiftReg#(Cmplx) twiddles <- mkShiftReg(n, computeTwiddle);
 
-  ShiftReg#(C16) tmp_buffer <- mkShiftReg(n, constFn(?));
-  ShiftReg#(C16) out_buffer <- mkShiftReg(n, constFn(?));
+  ShiftReg#(Cmplx) tmp_buffer <- mkShiftReg(n, constFn(?));
+  ShiftReg#(Cmplx) out_buffer <- mkShiftReg(n, constFn(?));
 
   function Action update_counter;
     action
@@ -499,12 +499,12 @@ module mkStageStreamFFT#(Bool inverse, Integer n) (Server#(C16, C16));
   // Apply the butterfly to the values in the shift register and the request,
   // return the first output, and save the second into the shift register
   rule stage1 if (stage == 1);
-    C16 x = tmp_buffer.first;
+    Cmplx x = tmp_buffer.first;
     // Compute `requests.first * twiddles.first` with three multipliers
-    F16 m1 = requests.first.rel * twiddles.first.rel;
-    F16 m2 = requests.first.img * twiddles.first.img;
-    F16 m3 = (requests.first.rel+requests.first.img) * (twiddles.first.rel+twiddles.first.img);
-    C16 y = cmplx(m1-m2, m3-m1-m2);
+    Fxpt m1 = requests.first.rel * twiddles.first.rel;
+    Fxpt m2 = requests.first.img * twiddles.first.img;
+    Fxpt m3 = (requests.first.rel+requests.first.img) * (twiddles.first.rel+twiddles.first.img);
+    Cmplx y = cmplx(m1-m2, m3-m1-m2);
 
     tmp_buffer.push(?);
     out_buffer.push(x - y);

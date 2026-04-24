@@ -37,14 +37,14 @@ function Action draw_graph
 `endif
 
 // Frequency domain representation of the long training sequence
-C16 lts_frequencies[64] = {
+Cmplx lts_frequencies[64] = {
    0,1,-1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,
    1,-1,-1,1,-1,1,-1,1,1,1,1,0,0,0,0,0,
    0,0,0,0,0,0,1,1,-1,-1,1,1,-1,1,-1,1,
    1,1,1,1,1,-1,-1,1,1,-1,1,-1,1,1,1,1
 };
 
-C16 lts_times[64] = {
+Cmplx lts_times[64] = {
   cmplx(0.15625, 0.0), cmplx(-0.0051213, -0.12033),
   cmplx(0.03975, -0.11116), cmplx(0.096832, 0.082798),
   cmplx(0.021112, 0.027886), cmplx(0.059824, -0.087707),
@@ -81,7 +81,7 @@ C16 lts_times[64] = {
 
 interface LtsCorrelator;
   // Add a new sample to the correlator
-  method Action push(C16 sample);
+  method Action push(Cmplx sample);
 
   // Give the result with a delay of 64 samples
   method Bit#(20) result;
@@ -92,7 +92,7 @@ module mkltsCorrelator(LtsCorrelator);
   Vector#(64, Reg#(Int#(10))) rel_buffer <- replicateM(mkReg(0));
   Vector#(64, Reg#(Int#(10))) img_buffer <- replicateM(mkReg(0));
 
-  method Action push(C16 sample);
+  method Action push(Cmplx sample);
     Bit#(1) rel = msb(sample.rel);
     Bit#(1) img = msb(sample.img);
 
@@ -119,10 +119,10 @@ endmodule
 
 interface Synchronizer;
   // Send a new sample to the synchronizer
-  method Action put_sample(C16 sample);
+  method Action put_sample(Cmplx sample);
 
   // An OFDM symbol extracted from the input samples by the synchronizer
-  method ActionValue#(Vector#(64, C16)) get_ofdm_symbol;
+  method ActionValue#(Vector#(64, Cmplx)) get_ofdm_symbol;
 
   // Inform the synchronizer of the end of a frame
   method Action back_to_idle;
@@ -138,15 +138,15 @@ module mkSynchronizer(Synchronizer);
   LtsCorrelator correlator <- mkltsCorrelator;
 
   // use a sized fifo because some computations (like cordic can take time)
-  FIFOF#(C16) input_samples <- mkSizedFIFOF(128);
+  FIFOF#(Cmplx) input_samples <- mkSizedFIFOF(128);
 
-  FIFOF#(Vector#(64, C16)) output_symbols <- mkFIFOF;
+  FIFOF#(Vector#(64, Cmplx)) output_symbols <- mkFIFOF;
 
   Reg#(Bit#(32)) input_number <- mkReg(0);
 
   // Keep track of the last 80 samples
   Integer input_buffer_length = 80;
-  Reg#(C16) input_buffer[input_buffer_length];
+  Reg#(Cmplx) input_buffer[input_buffer_length];
   for (Integer i=0; i < input_buffer_length; i = i + 1) begin
     input_buffer[i] <- mkReg(0);
   end
@@ -175,31 +175,31 @@ module mkSynchronizer(Synchronizer);
   // metric: if the ratio of the previous metric by this norm is too low, this means that I'am just
   // looking at noise currently.
   /////////////////////////////////////////////////////////////////////////////////////////////////
-  Reg#(C16) accumulator_y <- mkReg(0);
-  Reg#(F16) accumulator_z <- mkReg(0);
-  ShiftReg#(C16) buffer_x_16 <- mkShiftReg(16, constFn(0));
-  ShiftReg#(F16) buffer_z_144 <- mkShiftReg(16*9, constFn(0));
-  ShiftReg#(C16) buffer_y_144 <- mkShiftReg(16*9, constFn(0));
-  F16 y_z_threshold = 0.4;
+  Reg#(Cmplx) accumulator_y <- mkReg(0);
+  Reg#(Fxpt) accumulator_z <- mkReg(0);
+  ShiftReg#(Cmplx) buffer_x_16 <- mkShiftReg(16, constFn(0));
+  ShiftReg#(Fxpt) buffer_z_144 <- mkShiftReg(16*9, constFn(0));
+  ShiftReg#(Cmplx) buffer_y_144 <- mkShiftReg(16*9, constFn(0));
+  Fxpt y_z_threshold = 0.4;
 
   Integer peak_length = 8;
-  Reg#(F16) peak_detector[peak_length*2+1];
+  Reg#(Fxpt) peak_detector[peak_length*2+1];
   for (Integer i=0; i < peak_length*2+1; i = i + 1) peak_detector[i] <- mkReg(0);
 
   rule schmidl_cox_rl if (state == Idle);
     // Compute X(t) and X(t-16)
-    C16 x_t = input_buffer[0];
-    C16 x_tm16 = buffer_x_16.first;
+    Cmplx x_t = input_buffer[0];
+    Cmplx x_tm16 = buffer_x_16.first;
     deq_input_samples;
 
     // Compute Y(t) and Y(t-16*9)
-    C16 y_tm144 = buffer_y_144.first;
-    C16 y_t = x_t * cmplxConj(x_tm16);
+    Cmplx y_tm144 = buffer_y_144.first;
+    Cmplx y_t = x_t * cmplxConj(x_tm16);
     accumulator_y <= accumulator_y + y_t - y_tm144;
 
     // Compute Z(t) and Z(t-16*9)
-    F16 z_tm144 = buffer_z_144.first;
-    F16 z_t = (x_t * cmplxConj(x_t)).rel;
+    Fxpt z_tm144 = buffer_z_144.first;
+    Fxpt z_t = (x_t * cmplxConj(x_t)).rel;
     accumulator_z <= accumulator_z + z_t - z_tm144;
 
     // Update the shift registers
@@ -208,8 +208,8 @@ module mkSynchronizer(Synchronizer);
     buffer_x_16.push(x_t);
 
     // Compute the norm of sum Y(t) and sum Z(t) for peak detection
-    F16 z_norm = accumulator_z * accumulator_z;
-    F16 y_norm = (accumulator_y * cmplxConj(accumulator_y)).rel;
+    Fxpt z_norm = accumulator_z * accumulator_z;
+    Fxpt y_norm = (accumulator_y * cmplxConj(accumulator_y)).rel;
 
     // Compare the power of Y and Z: low power peaks are not considered valids
     if (y_norm > z_norm * y_z_threshold) begin
@@ -273,7 +273,7 @@ module mkSynchronizer(Synchronizer);
 
     if (lts_delay == 0) begin
       $display("view symbol at number: %d", input_number);
-      Vector#(64, C16) out = newVector;
+      Vector#(64, Cmplx) out = newVector;
       for (Integer i=0; i < 64; i = i + 1) begin
         out[i] = input_buffer[63 - i];
       end
@@ -288,13 +288,13 @@ module mkSynchronizer(Synchronizer);
     lts_delay <= 0;
     state <= Idle;
   endmethod
-  method ActionValue#(Vector#(64,C16)) get_ofdm_symbol = toGet(output_symbols).get;
+  method ActionValue#(Vector#(64,Cmplx)) get_ofdm_symbol = toGet(output_symbols).get;
 endmodule
 
-module mkNumericOscilator#(Bit#(32) frequency, Bit#(32) sample_rate) (Get#(C16));
+module mkNumericOscilator#(Bit#(32) frequency, Bit#(32) sample_rate) (Get#(Cmplx));
   Reg#(Bit#(32)) phase <- mkReg(0);
 
-  method ActionValue#(C16) get;
+  method ActionValue#(Cmplx) get;
     // Update oscilator phase
     phase <= phase + frequency < sample_rate ? phase + frequency : phase + frequency - sample_rate;
 
@@ -307,63 +307,66 @@ endmodule
 
 (* synthesize *)
 module mkTestSynchronizer(Empty);
-  RegFile#(Bit#(32), F16) samples <- mkRegFileLoad("samples.hex", 0, 465000);
+  RegFile#(Bit#(32), Fxpt) samples <- mkRegFileLoad("samples.hex", 0, 465000);
   Reg#(Bit#(32)) sample_num <- mkReg(0);
 
   let synchronizer <- mkSynchronizer;
   let fft_64 <- mkStreamFFT64;
 
-  Reg#(C16) signal <- mkReg(0);
-  Get#(C16) oscilator <- mkNumericOscilator(2000, 44100);
+  Reg#(Cmplx) signal <- mkReg(0);
+  Get#(Cmplx) oscilator <- mkNumericOscilator(2000, 44100);
 
   Reg#(Bit#(32)) down_sampler <- mkReg(0);
 
-  Reg#(Maybe#(Vector#(64, C16))) correction_symbol <- mkReg(Invalid);
+  Reg#(Maybe#(Vector#(64, Cmplx))) correction_symbol <- mkReg(Invalid);
+
+  Reg#(Bit#(32)) symbol_num <- mkReg(0);
 
   rule from_fft;
-    Vector#(64,C16) freq = fft_64.response;
+    Vector#(64,Cmplx) freq = fft_64.response;
+    symbol_num <= symbol_num + 1;
     fft_64.deq;
 
-    //if (correction_symbol matches tagged Valid .x) begin
-    //  for (Integer i=0; i < 64; i = i + 1) freq[i] = freq[i] * x[i];
-    //end else begin
-    //  Vector#(64,C16) x = newVector;
-    //  for (Integer i=0; i < 64; i = i + 1) x[i] = lts_frequencies[i] / freq[i];
-    //  correction_symbol <= Valid(x);
-    //end
+    if (correction_symbol matches tagged Valid .x) begin
+      for (Integer i=0; i < 64; i = i + 1) freq[i] = freq[i] * x[i];
+    end else begin
+      Vector#(64,Cmplx) x = newVector;
+      for (Integer i=0; i < 64; i = i + 1) x[i] = lts_frequencies[i] / freq[i];
+      correction_symbol <= Valid(x);
+    end
 
-    //$display("\n=== frequencies ===");
-    //for (Integer i=0; i < valueof(64); i = i + 1) begin
-    //  $write("%d: rel: ", i);
-    //  fxptWrite(7, freq[i].rel);
-    //  $write(" img: ");
-    //  fxptWrite(7, freq[i].img);
-    //  $display();
-    //end
+    $display("\n=== frequencies ===");
+    for (Integer i=0; i < valueof(64); i = i + 1) begin
+      $write("%d: rel: ", i);
+      fxptWrite(7, freq[i].rel);
+      $write(" img: ");
+      fxptWrite(7, freq[i].img);
+      $display();
+    end
   endrule
 
   rule synchronizer_to_fft;
     let symbol <- synchronizer.get_ofdm_symbol;
     fft_64.enq(symbol);
-    $display("\n=== symbol ===");
-    for (Integer i=0; i < valueof(64); i = i + 1) begin
-      $write("%d: rel: ", i);
-      fxptWrite(7, symbol[i].rel);
-      $write(" img: ");
-      fxptWrite(7, symbol[i].img);
-      $display();
-    end
+    //$display("\n=== symbol ===");
+    //for (Integer i=0; i < valueof(64); i = i + 1) begin
+    //  $write("%d: rel: ", i);
+    //  fxptWrite(7, symbol[i].rel);
+    //  $write(" img: ");
+    //  fxptWrite(7, symbol[i].img);
+    //  $display();
+    //end
   endrule
 
   mkAutoFSM(seq
       render_graph();
       while (sample_num < 465000) action
-        F16 sample = samples.sub(sample_num);
+        Fxpt sample = samples.sub(sample_num);
         sample_num <= sample_num + 1;
 
-        F16 alpha = 0.005;
-        C16 carrier_approx <- oscilator.get;
-        C16 x = cmplx(sample, 0) * carrier_approx;
+        Fxpt alpha = 0.005;
+        Cmplx carrier_approx <- oscilator.get;
+        Cmplx x = cmplx(sample, 0) * carrier_approx;
         signal <= signal * cmplx(1-alpha,0) + cmplx(alpha,0) * x;
 
         color_graph(0, 0, 255);
@@ -371,11 +374,10 @@ module mkTestSynchronizer(Empty);
         color_graph(255, 0, 0);
         draw_graph(sample_num, signExtend(pack(signal.img)), 456000, 65536*2);
 
-        if (down_sampler == 250) begin
+        down_sampler <= down_sampler == 250 ? 0 : down_sampler + 1;
+
+        if (down_sampler == 0) begin
           synchronizer.put_sample(signal);
-          down_sampler <= 0;
-        end else begin
-          down_sampler <= down_sampler+1;
         end
       endaction
       render_graph();

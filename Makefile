@@ -35,7 +35,8 @@ BSC_FLAGS = -show-schedule -show-range-conflict -keep-fires -aggressive-conditio
  						+RTS -K128M -RTS
 
 SYNTH_FLAGS = -bdir $(BUILD) -vdir $(BUILD) -simdir $(BUILD) \
-							-info-dir $(BUILD) -fdir $(BUILD)
+							-info-dir $(BUILD) -fdir $(BUILD) \
+							-steps-max-intervals 10000000
 
 BSIM_FLAGS = -bdir $(BSIM) -vdir $(BSIM) -simdir $(BSIM) \
 							-info-dir $(BSIM) -fdir $(BSIM) -D BSIM -l pthread -l SDL2 \
