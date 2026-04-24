@@ -24,3 +24,44 @@ class Scrambler:
             out.append(data[i] ^ bit)
 
         return out
+
+class DeScrambler:
+    def __init__(self):
+        pass
+
+    def next(state):
+        bit = state[0] ^ state[3]
+        state = state[1:7] + [bit]
+        return (bit, state)
+
+    def sequence(state, length):
+        out = []
+        for _ in range(length):
+            (bit, state) = DeScrambler.next(state)
+            out.append(bit)
+
+        return (out, state)
+
+    def run(self, reset, data):
+        if reset:
+            self.state = [1,1,1,1,1,1,1]
+
+            for _ in range(127):
+                (seq, _) = DeScrambler.sequence(self.state, 7)
+
+                stop = True
+                for i in range(7):
+                    if seq[i] != data[i]:
+                        stop = False
+
+                if stop:
+                    break
+
+                (_, self.state) = DeScrambler.next(self.state)
+
+        out = []
+        for i in range(len(data)):
+            (bit, self.state) = DeScrambler.next(self.state)
+            out.append(data[i] ^ bit)
+
+        return out

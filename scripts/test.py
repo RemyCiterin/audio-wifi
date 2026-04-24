@@ -9,7 +9,7 @@ import sys
 
 import constants
 from convolutive_encoder import ViterbiDecoder, ConvEncoder
-from scrambler import Scrambler
+from scrambler import Scrambler, DeScrambler
 
 from header import makeheader, from_header
 from interleaver import Interleaver, DeInterleaver
@@ -152,11 +152,12 @@ if __name__ == "__main__" and args["decode"]:
 
     print(np.mean(np.abs(samples)))
     #file = open("samples.hex", "w")
+    #print("@0", file=file)
     #for sample in samples:
-    #    sample = int(sample * 256)
+    #    sample = int(sample * 65536)
     #    if sample < 0:
-    #        sample = sample + 256 * 256
-    #    print("{:04x}".format(sample), file=file)
+    #        sample = sample + 65536 * 65536
+    #    print("{:08x}".format(sample), file=file)
     #file.close()
 
     plt.plot(
@@ -167,20 +168,23 @@ if __name__ == "__main__" and args["decode"]:
     carrier_cos = np.cos(2*np.pi*carrier_freq*np.arange(len(samples))/sample_rate)
     carrier_sin = np.sin(2*np.pi*carrier_freq*np.arange(len(samples))/sample_rate)
 
+    #carrier_cos = 2.0 * (carrier_cos > 0) - 1
+    #carrier_sin = 2.0 * (carrier_sin > 0) - 1
+
     from backman import backman
     I = samples * carrier_cos
     Q = samples * carrier_sin
-    acc_I = 0
-    acc_Q = 0
-    for i in range(len(I)):
-        acc_I = (1-0.005) * acc_I + 0.005 * I[i]
-        acc_Q = (1-0.005) * acc_Q + 0.005 * Q[i]
-        I[i] = acc_I
-        Q[i] = acc_Q
-        pass
 
-    #I = backman(I, BACKMAN_SIZE)
-    #Q = backman(Q, BACKMAN_SIZE)
+    #acc_I = 0
+    #acc_Q = 0
+    #for i in range(len(I)):
+    #    acc_I = (1-0.005) * acc_I + 0.005 * I[i]
+    #    acc_Q = (1-0.005) * acc_Q + 0.005 * Q[i]
+    #    I[i] = acc_I
+    #    Q[i] = acc_Q
+
+    I = backman(I, BACKMAN_SIZE)
+    Q = backman(Q, BACKMAN_SIZE)
 
     amplitude = np.sqrt(np.mean(I*I+Q*Q))
     I /= amplitude
@@ -229,7 +233,7 @@ if __name__ == "__main__" and args["decode"]:
     print("frequency offset: {}, new frequency: {}"
           .format(freq_offset1, carrier_freq + freq_offset1))
 
-    X *= np.exp(-2j*np.pi*freq_offset1/sample_rate*np.arange(len(I)))
+    #X *= np.exp(-2j*np.pi*freq_offset1/sample_rate*np.arange(len(I)))
     I = X.real
     Q = X.imag
 
@@ -263,7 +267,6 @@ if __name__ == "__main__" and args["decode"]:
     print_time_domain(ltf1)
     print("ltf2: ")
     print_time_domain(ltf2)
-    assert(False)
     equalisation.set_ltf((ltf2 + ltf1) / 2)
 
     header_pos = start_ltf1 + 2 * Ts * Nrepeat
@@ -279,6 +282,7 @@ if __name__ == "__main__" and args["decode"]:
     demapper = DeMapper()
     deinterleaver = DeInterleaver()
     viterbi = ViterbiDecoder()
+    descrambler = DeScrambler()
 
     header = demapper.run(constants.RATE_6MBPS, header_freq)
     header = deinterleaver.run(constants.RATE_6MBPS, header)
@@ -287,7 +291,7 @@ if __name__ == "__main__" and args["decode"]:
     print("length: {} rate: {:b}".format(length, rate))
     print(format_bits(header))
 
-    CONSTELATION_36M = make_constelation(constants.RATE_36MBPS)
+    CONSTELATION_36M = make_constelation(rate)
     plt.plot(CONSTELATION_36M.real, CONSTELATION_36M.imag, "ko", markersize=10)
 
     print((length * 8 + 24) / constants.data_bits_per_ofdm(rate))
@@ -299,8 +303,8 @@ if __name__ == "__main__" and args["decode"]:
         if len(data) < 64: break
 
         data_freq = equalisation.run(False, scipy.fft.fft(data))
-        data = demapper.run(constants.RATE_36MBPS, data_freq)
-        data = deinterleaver.run(constants.RATE_36MBPS, data)
+        data = demapper.run(rate, data_freq)
+        data = deinterleaver.run(rate, data)
 
         if constants.puncturing_from_rate(rate) == constants.PUNCTURING_1_2: batch_size = 48
         if constants.puncturing_from_rate(rate) == constants.PUNCTURING_2_3: batch_size = 36
@@ -309,7 +313,15 @@ if __name__ == "__main__" and args["decode"]:
         for j in range(len(data) // batch_size):
             x = data[j*batch_size:(j+1)*batch_size]
             x = viterbi.run(rate if i == 0 and j == 0 else None, x)
+            x = descrambler.run(i == 0 and j == 0, x)
             print(format_bits(x))
+
+            for k in range(3):
+                byte = 0
+                for i in range(8):
+                    byte |= x[8*k+i] << i
+                print(chr(byte), end="")
+            print()
 
         if i == 0: color = "r."
         elif i == 1: color = "r."
