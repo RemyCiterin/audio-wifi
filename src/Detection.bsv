@@ -38,14 +38,6 @@ function Action draw_graph
   (Bit#(32) x, Bit#(32) y, Bit#(32) scale_x, Bit#(32) scale_y) = noAction;
 `endif
 
-// Frequency domain representation of the long training sequence
-Cmplx lts_frequencies[64] = {
-   0,1,-1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,
-   1,-1,-1,1,-1,1,-1,1,1,1,1,0,0,0,0,0,
-   0,0,0,0,0,0,1,1,-1,-1,1,1,-1,1,-1,1,
-   1,1,1,1,1,-1,-1,1,1,-1,1,-1,1,1,1,1
-};
-
 Cmplx lts_times[64] = {
   cmplx(0.15625, 0.0), cmplx(-0.0051213, -0.12033),
   cmplx(0.03975, -0.11116), cmplx(0.096832, 0.082798),
@@ -247,7 +239,7 @@ module mkSynchronizer(Synchronizer);
   Reg#(Bit#(20)) best_correlation <- mkReg(0);
   Reg#(Bit#(32)) best_correlation_delay <- mkReg(0);
   Reg#(Bit#(32)) lts_delay <- mkReg(0);
-  Integer lts_sync_range = 20;
+  Integer lts_sync_range = 10;
 
   rule lts_sync if (state == WaitForLts);
     deq_input_samples;
@@ -311,6 +303,30 @@ module mkNumericOscilator#(Bit#(32) frequency, Bit#(32) sample_rate) (Get#(Cmplx
 endmodule
 
 (* synthesize *)
+module mkSymbolPrinter(Put#(Symbol));
+  Reg#(Bit#(6)) index <- mkReg(0);
+  Reg#(Symbol) symbol <- mkRegU;
+  Reg#(Bool) valid <- mkReg(False);
+
+  rule prnit if (valid);
+    $write("    [%d] rel: ", index);
+    fxptWrite(4, symbol[index].rel);
+    $write(" img: ");
+    fxptWrite(4, symbol[index].img);
+    $display;
+
+    valid <= index + 1 != 0;
+    index <= index + 1;
+  endrule
+
+  method Action put(Symbol s) if (!valid);
+    $display("==== frequencies ===");
+    valid <= True;
+    symbol <= s;
+  endmethod
+endmodule
+
+(* synthesize *)
 module mkTestSynchronizer(Empty);
   RegFile#(Bit#(32), Fxpt) samples <- mkRegFileLoad("samples.hex", 0, 465000);
   Reg#(Bit#(32)) sample_num <- mkReg(0);
@@ -327,17 +343,15 @@ module mkTestSynchronizer(Empty);
 
   Equalisation equalisation <- mkEqualisation;
 
+  let printer <- mkSymbolPrinter;
+
   rule from_equalisation;
     Symbol freq <- equalisation.get;
     symbol_num <= symbol_num + 1;
+    printer.put(freq);
 
-    $display("\n=== frequencies ===");
-    for (Integer i=0; i < valueof(64); i = i + 1) begin
-      $write("%d: rel: ", i);
-      fxptWrite(4, freq[i].rel);
-      $write(" img: ");
-      fxptWrite(4, freq[i].img);
-      $display();
+    if (symbol_num == 0) for (Integer i=0; i < 64; i = i + 1) begin
+      draw_graph(pack(freq[i].rel), pack(freq[i].img), 65536*2, 65536*2);
     end
   endrule
 
@@ -363,15 +377,15 @@ module mkTestSynchronizer(Empty);
         Cmplx x = cmplx(sample, 0) * carrier_approx;
         signal <= signal * cmplx(1-alpha,0) + cmplx(alpha,0) * x;
 
-        color_graph(0, 0, 255);
-        draw_graph(sample_num, signExtend(pack(signal.rel)), 456000, 65536*2);
-        color_graph(255, 0, 0);
-        draw_graph(sample_num, signExtend(pack(signal.img)), 456000, 65536*2);
+        //color_graph(0, 0, 255);
+        //draw_graph(sample_num, signExtend(pack(signal.rel)), 456000, 65536*2);
+        //color_graph(255, 0, 0);
+        //draw_graph(sample_num, signExtend(pack(signal.img)), 456000, 65536*2);
 
-        down_sampler <= down_sampler == 250 ? 0 : down_sampler + 1;
+        down_sampler <= down_sampler + 1 == 250 ? 0 : down_sampler + 1;
 
         if (down_sampler == 0) begin
-          synchronizer.put_sample(signal);
+          synchronizer.put_sample(signal * cmplx(1/0.37,0));
         end
       endaction
       render_graph();

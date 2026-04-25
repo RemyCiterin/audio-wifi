@@ -167,7 +167,6 @@ if __name__ == "__main__" and args["decode"]:
 
     carrier_cos = np.cos(2*np.pi*carrier_freq*np.arange(len(samples))/sample_rate)
     carrier_sin = np.sin(2*np.pi*carrier_freq*np.arange(len(samples))/sample_rate)
-
     carrier_cos = 2.0 * (carrier_cos > 0) - 1
     carrier_sin = 2.0 * (carrier_sin > 0) - 1
 
@@ -178,17 +177,15 @@ if __name__ == "__main__" and args["decode"]:
     acc_I = 0
     acc_Q = 0
     for i in range(len(I)):
+        new_I = acc_I
+        new_Q = acc_Q
         acc_I = (1-0.005) * acc_I + 0.005 * I[i]
         acc_Q = (1-0.005) * acc_Q + 0.005 * Q[i]
-        I[i] = acc_I
-        Q[i] = acc_Q
+        I[i] = new_I # acc_I
+        Q[i] = new_Q # acc_Q
 
     #I = backman(I, BACKMAN_SIZE)
     #Q = backman(Q, BACKMAN_SIZE)
-
-    amplitude = np.sqrt(np.mean(I*I+Q*Q))
-    I /= amplitude
-    Q /= amplitude
     X = I + 1j*Q
 
     plt.plot(I*I+Q*Q)
@@ -203,6 +200,9 @@ if __name__ == "__main__" and args["decode"]:
     Nrepeat //= factor
     Ts = 81
     Tp = 16
+
+    for (i, s) in enumerate(I):
+        print("samples[{}] = {:.4f}".format(i, s))
 
     def C1(t):
         Xt = X[t:t+Nrepeat*(2*Ts-Tp)].conjugate()
