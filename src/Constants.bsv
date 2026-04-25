@@ -1,10 +1,13 @@
 import FixedPoint::*;
 import Complex::*;
+import Vector::*;
 
 typedef 64 FFT_SIZE;
 
 typedef FixedPoint#(16,16) Fxpt;
 typedef Complex#(Fxpt) Cmplx;
+
+typedef Vector#(FFT_SIZE, Cmplx) Symbol;
 
 typedef enum {
   BPSK = 1,

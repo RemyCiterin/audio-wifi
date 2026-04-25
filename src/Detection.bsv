@@ -18,6 +18,8 @@ import RegFile::*;
 import FIFOF::*;
 import Real::*;
 
+import Equalisation::*;
+
 export Synchronizer(..);
 export mkSynchronizer;
 export mkTestSynchronizer;
@@ -245,10 +247,12 @@ module mkSynchronizer(Synchronizer);
   Reg#(Bit#(20)) best_correlation <- mkReg(0);
   Reg#(Bit#(32)) best_correlation_delay <- mkReg(0);
   Reg#(Bit#(32)) lts_delay <- mkReg(0);
-  Integer lts_sync_range = 10;
+  Integer lts_sync_range = 20;
 
   rule lts_sync if (state == WaitForLts);
     deq_input_samples;
+
+    $display("correlation at time %d is %d", input_number, correlator.result);
 
     if (correlator.result > best_correlation) begin
       best_correlation <= correlator.result;
@@ -272,6 +276,7 @@ module mkSynchronizer(Synchronizer);
     deq_input_samples;
 
     if (lts_delay == 0) begin
+      $display("correlator output at time %d is %d", input_number, correlator.result);
       $display("view symbol at number: %d", input_number);
       Vector#(64, Cmplx) out = newVector;
       for (Integer i=0; i < 64; i = i + 1) begin
@@ -288,7 +293,7 @@ module mkSynchronizer(Synchronizer);
     lts_delay <= 0;
     state <= Idle;
   endmethod
-  method ActionValue#(Vector#(64,Cmplx)) get_ofdm_symbol = toGet(output_symbols).get;
+  method ActionValue#(Symbol) get_ofdm_symbol = toGet(output_symbols).get;
 endmodule
 
 module mkNumericOscilator#(Bit#(32) frequency, Bit#(32) sample_rate) (Get#(Cmplx));
@@ -318,44 +323,33 @@ module mkTestSynchronizer(Empty);
 
   Reg#(Bit#(32)) down_sampler <- mkReg(0);
 
-  Reg#(Maybe#(Vector#(64, Cmplx))) correction_symbol <- mkReg(Invalid);
-
   Reg#(Bit#(32)) symbol_num <- mkReg(0);
 
-  rule from_fft;
-    Vector#(64,Cmplx) freq = fft_64.response;
-    symbol_num <= symbol_num + 1;
-    fft_64.deq;
+  Equalisation equalisation <- mkEqualisation;
 
-    if (correction_symbol matches tagged Valid .x) begin
-      for (Integer i=0; i < 64; i = i + 1) freq[i] = freq[i] * x[i];
-    end else begin
-      Vector#(64,Cmplx) x = newVector;
-      for (Integer i=0; i < 64; i = i + 1) x[i] = lts_frequencies[i] / freq[i];
-      correction_symbol <= Valid(x);
-    end
+  rule from_equalisation;
+    Symbol freq <- equalisation.get;
+    symbol_num <= symbol_num + 1;
 
     $display("\n=== frequencies ===");
     for (Integer i=0; i < valueof(64); i = i + 1) begin
       $write("%d: rel: ", i);
-      fxptWrite(7, freq[i].rel);
+      fxptWrite(4, freq[i].rel);
       $write(" img: ");
-      fxptWrite(7, freq[i].img);
+      fxptWrite(4, freq[i].img);
       $display();
     end
+  endrule
+
+  rule from_fft;
+    Symbol freq = fft_64.response;
+    equalisation.put(freq);
+    fft_64.deq;
   endrule
 
   rule synchronizer_to_fft;
     let symbol <- synchronizer.get_ofdm_symbol;
     fft_64.enq(symbol);
-    //$display("\n=== symbol ===");
-    //for (Integer i=0; i < valueof(64); i = i + 1) begin
-    //  $write("%d: rel: ", i);
-    //  fxptWrite(7, symbol[i].rel);
-    //  $write(" img: ");
-    //  fxptWrite(7, symbol[i].img);
-    //  $display();
-    //end
   endrule
 
   mkAutoFSM(seq

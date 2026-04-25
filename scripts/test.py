@@ -168,23 +168,23 @@ if __name__ == "__main__" and args["decode"]:
     carrier_cos = np.cos(2*np.pi*carrier_freq*np.arange(len(samples))/sample_rate)
     carrier_sin = np.sin(2*np.pi*carrier_freq*np.arange(len(samples))/sample_rate)
 
-    #carrier_cos = 2.0 * (carrier_cos > 0) - 1
-    #carrier_sin = 2.0 * (carrier_sin > 0) - 1
+    carrier_cos = 2.0 * (carrier_cos > 0) - 1
+    carrier_sin = 2.0 * (carrier_sin > 0) - 1
 
     from backman import backman
     I = samples * carrier_cos
     Q = samples * carrier_sin
 
-    #acc_I = 0
-    #acc_Q = 0
-    #for i in range(len(I)):
-    #    acc_I = (1-0.005) * acc_I + 0.005 * I[i]
-    #    acc_Q = (1-0.005) * acc_Q + 0.005 * Q[i]
-    #    I[i] = acc_I
-    #    Q[i] = acc_Q
+    acc_I = 0
+    acc_Q = 0
+    for i in range(len(I)):
+        acc_I = (1-0.005) * acc_I + 0.005 * I[i]
+        acc_Q = (1-0.005) * acc_Q + 0.005 * Q[i]
+        I[i] = acc_I
+        Q[i] = acc_Q
 
-    I = backman(I, BACKMAN_SIZE)
-    Q = backman(Q, BACKMAN_SIZE)
+    #I = backman(I, BACKMAN_SIZE)
+    #Q = backman(Q, BACKMAN_SIZE)
 
     amplitude = np.sqrt(np.mean(I*I+Q*Q))
     I /= amplitude
