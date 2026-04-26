@@ -46,12 +46,13 @@ provisos(Add#(i,f,n), Alias#(fix, FixedPoint#(i,f)), Min#(i,1,1), Min#(n,2,2));
   end
 
   interface Put request;
-    method Action put(fix x) if (!valid[0][1]);
+    method Action put(fix a) if (!valid[0][1]);
+      Bool inBounds = -fromReal(pi/2) <= a && a <= fromReal(pi/2);
+      theta[0] <= inBounds ? 0 : (a > 0 ? fromReal(pi) : -fromReal(pi));
+      x_coord[0] <= inBounds ? 1 : -1;
       valid[0][1] <= True;
-      x_coord[0] <= 1;
       y_coord[0] <= 0;
-      alpha[0] <= x;
-      theta[0] <= 0;
+      alpha[0] <= a;
     endmethod
   endinterface
 
@@ -131,32 +132,31 @@ provisos(Add#(i,f,n), Alias#(fix, FixedPoint#(i,f)), Min#(i,1,1), Min#(n,2,2));
   endinterface
 endmodule
 
-
 (* synthesize *)
-module mkCordicTest(Empty) provisos(Alias#(FixedPoint#(8,8), f16));
-  Server#(Tuple2#(f16, f16), f16) cordic1 <- mkAtanCordic(16);
-  Server#(f16, Tuple2#(f16, f16)) cordic2 <- mkCosSinCordic(16);
+module mkCordicTest(Empty) provisos(Alias#(FixedPoint#(8,16), fix));
+  Server#(Tuple2#(fix, fix), fix) cordic1 <- mkAtanCordic(16);
+  Server#(fix, Tuple2#(fix, fix)) cordic2 <- mkCosSinCordic(16);
 
-  Real test_angle = pi / 4;
-  Real test_x = -1;
-  Real test_y = -125;
+  Real test_angle = -pi;
+  Real test_x = -0.5;
+  Real test_y = 0.5;
 
   mkAutoFSM(seq
     cordic1.request.put(tuple2(fromReal(test_y), fromReal(test_x)));
     action
       let x <- cordic1.response.get();
       $display("======== ATAN 2 ========");
-      $display("atan2;  ", fshow(f16'(fromReal(atan2(test_y, test_x)))));
-      $display("approx: ", fshow(x));
+      $display("atan2;  ", realToString(atan2(test_y, test_x)));
+      $display("approx: "); fxptWrite(6, x); $display;
     endaction
 
     cordic2.request.put(fromReal(test_angle));
     action
       let x <- cordic2.response.get();
       $display("======== Cos/Sin ========");
-      $display("cosinus: ", fshow(f16'(fromReal(cos(test_angle)))));
-      $display("sinus:   ", fshow(f16'(fromReal(sin(test_angle)))));
-      $display("approx:  ", fshow(x));
+      $display("cosinus: ", realToString(cos(test_angle)));
+      $display("sinus: ", realToString(sin(test_angle)));
+      $write("approx:  "); fxptWrite(6,x.fst); $write(" "); fxptWrite(6, x.snd); $display;
     endaction
   endseq);
 endmodule
