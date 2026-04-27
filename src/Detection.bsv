@@ -81,8 +81,13 @@ interface LtsCorrelator;
   method Bit#(20) result;
 endinterface
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Give an estimatied correlation score between the last 64 samples and the Long-Training-Symbol:
+// Doing so one can find the instant of the begining of a WIFI frame by finding the time that
+// maximize the correlation score.
+///////////////////////////////////////////////////////////////////////////////////////////////////
 (* synthesize *)
-module mkltsCorrelator(LtsCorrelator);
+module mkLtsCorrelator(LtsCorrelator);
   Vector#(64, Reg#(Int#(10))) rel_buffer <- replicateM(mkReg(0));
   Vector#(64, Reg#(Int#(10))) img_buffer <- replicateM(mkReg(0));
 
@@ -130,7 +135,7 @@ typedef enum {
 
 (* synthesize *)
 module mkSynchronizer(Synchronizer);
-  LtsCorrelator correlator <- mkltsCorrelator;
+  LtsCorrelator correlator <- mkLtsCorrelator;
 
   // use a sized fifo because some computations (like cordic can take time)
   FIFOF#(Cmplx) input_samples <- mkSizedFIFOF(128);
@@ -400,5 +405,4 @@ module mkTestSynchronizer(Empty);
       $display("finish");
       while (True) noAction;
   endseq);
-
 endmodule

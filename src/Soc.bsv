@@ -16,6 +16,8 @@ import CORDIC::*;
 import Equalisation::*;
 import Detection::*;
 
+import Mapper::*;
+
 interface SOC_IFC;
   (* always_ready, always_enabled *)
   method Bit#(8) led;
