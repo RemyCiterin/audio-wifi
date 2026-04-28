@@ -20,6 +20,8 @@ import Real::*;
 
 import Equalisation::*;
 
+import Mapper::*;
+
 export Synchronizer(..);
 export mkSynchronizer;
 export mkTestSynchronizer;
@@ -286,6 +288,7 @@ module mkSynchronizer(Synchronizer);
   endrule
 
   method put_sample = input_samples.enq;
+
   method Action back_to_idle;
     best_correlation <= 0;
     lts_delay <= 0;
@@ -354,6 +357,8 @@ module mkTestSynchronizer(Empty);
   Reg#(Bit#(32)) symbol_num <- mkReg(0);
 
   Equalisation equalisation <- mkFullEqualisation;
+
+  DeMapper demapper <- mkDeMapper;
 
   let printer <- mkSymbolPrinter;
 

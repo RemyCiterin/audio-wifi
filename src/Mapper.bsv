@@ -8,7 +8,7 @@ import Real::*;
 // Map one bit into a BPSK endoded carrier:
 // see table 82 of https://pdos.csail.mit.edu/archive/decouto/papers/802.11a.pdf
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-function Cmplx get_bpsk_value(Bit#(1) x);
+function Cmplx encode_bpsk_value(Bit#(1) x);
   Fxpt i = case (x) matches
     'b0 : -1;
     'b1 : 1;
@@ -23,7 +23,7 @@ endfunction
 // Map two bits into a QPSK endoded carrier:
 // see table 83 of https://pdos.csail.mit.edu/archive/decouto/papers/802.11a.pdf
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-function Cmplx get_qpsk_value(Bit#(2) x);
+function Cmplx encode_qpsk_value(Bit#(2) x);
   // warning: the original table look at the bits in reverse order
   function Fxpt toFxpt(Bit#(1) b);
     return case (b) matches
@@ -39,7 +39,7 @@ endfunction
 // Map four bits into a 16-QAM endoded carrier:
 // see table 84 of https://pdos.csail.mit.edu/archive/decouto/papers/802.11a.pdf
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-function Cmplx get_qam16_value(Bit#(4) x);
+function Cmplx encode_qam16_value(Bit#(4) x);
   // warning: the original table look at the bits in reverse order
   function Fxpt toFxpt(Bit#(2) b);
     return case (b) matches
@@ -57,7 +57,7 @@ endfunction
 // Map six bits into a 64-QAM endoded carrier:
 // see table 84 of https://pdos.csail.mit.edu/archive/decouto/papers/802.11a.pdf
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-function Cmplx get_qam64_value(Bit#(6) x);
+function Cmplx encode_qam64_value(Bit#(6) x);
   // warning: the original table look at the bits in reverse order
   function Fxpt toFxpt(Bit#(3) b);
     return case (b) matches
@@ -132,10 +132,10 @@ module mkMapper(Mapper);
 
     for (Integer i=0; i < 48; i = i + 1) begin
       Cmplx carrier_coef = case (modulation_from_rate(rate)) matches
-        BPSK : get_bpsk_value(bpsk_indices[i]);
-        QPSK : get_qpsk_value(qpsk_indices[i]);
-        QAM16 : get_qam16_value(qam16_indices[i]);
-        QAM64 : get_qam64_value(qam64_indices[i]);
+        BPSK : encode_bpsk_value(bpsk_indices[i]);
+        QPSK : encode_qpsk_value(qpsk_indices[i]);
+        QAM16 : encode_qam16_value(qam16_indices[i]);
+        QAM64 : encode_qam64_value(qam64_indices[i]);
       endcase;
 
       symbol[positions[i]] = carrier_coef;
@@ -151,3 +151,72 @@ interface DeMapper;
   method Action put(DataRate rate, Symbol symbol);
   method ActionValue#(Bit#(288)) get();
 endinterface
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Demapper, perform the hard-decision demapping of the input signals using pairs of (symbol, data
+// rate), the effective output use the less significant bits of the 288 bits of output packets.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+(* synthesize *)
+module mkDeMapper(DeMapper);
+  Reg#(Bool) valid <- mkReg(False);
+  Reg#(DataRate) rate <- mkRegU;
+  Reg#(Symbol) symbol <- mkRegU;
+
+  Integer positions[48] = {
+    -26,-25,-24,-23,-22,-20,-19,-18,-17,-16,-15,-14,-13,-12,-11,-10,-9,-8,-6,-5,-4,-3,-2,-1,
+    1,2,3,4,5,6,8,9,10,11,12,13,14,15,16,17,18,19,20,22,23,24,25,26
+  };
+
+  for (Integer i=0; i < 24; i = i + 1) begin
+    positions[i] = 64 + positions[i];
+  end
+
+  function Bit#(1) inRange(Fxpt f, Real r) = pack(fromReal(-r) < f && f < fromReal(r));
+
+  method Action put(DataRate r, Symbol s) if (!valid);
+    valid <= True;
+    symbol <= s;
+    rate <= r;
+  endmethod
+
+  method ActionValue#(Bit#(288)) get if (valid);
+    Vector#(48,Bit#(1)) bpsk_packet = replicate(0);
+    Vector#(48,Bit#(2)) qpsk_packet = replicate(0);
+    Vector#(48,Bit#(4)) qam16_packet = replicate(0);
+    Vector#(48,Bit#(6)) qam64_packet = replicate(0);
+
+    for (Integer i=0; i < 48; i = i + 1) begin
+      Cmplx subcarrier = symbol[positions[i]];
+
+      // BPSK demapping
+      bpsk_packet[i] = subcarrier.rel > 0 ? 1 : 0;
+
+      // QPQK demapping
+      qpsk_packet[i][0] = subcarrier.rel > 0 ? 1 : 0;
+      qpsk_packet[i][1] = subcarrier.img > 0 ? 1 : 0;
+
+      // 16-QAM demapping
+      qam16_packet[i][0] = subcarrier.rel > 0 ? 1 : 0;
+      qam16_packet[i][1] = inRange(subcarrier.rel, 2/sqrt(10));
+      qam16_packet[i][2] = subcarrier.img > 0 ? 1 : 0;
+      qam16_packet[i][3] = inRange(subcarrier.img, 2/sqrt(10));
+
+      // 64-QAM demapping
+      qam64_packet[i][0] = subcarrier.rel > 0 ? 1 : 0;
+      qam64_packet[i][1] = inRange(subcarrier.rel, 4/sqrt(42));
+      qam64_packet[i][2] =
+        inRange(subcarrier.rel, 6/sqrt(42)) & ~inRange(subcarrier.rel, 2/sqrt(42));
+      qam64_packet[i][3] = subcarrier.img > 0 ? 1 : 0;
+      qam64_packet[i][4] = inRange(subcarrier.img, 4/sqrt(42));
+      qam64_packet[i][5] =
+        inRange(subcarrier.img, 6/sqrt(42)) & ~inRange(subcarrier.img, 2/sqrt(42));
+    end
+
+    return case (modulation_from_rate(rate)) matches
+      QAM16 : zeroExtend(pack(qam16_packet));
+      QAM64 : zeroExtend(pack(qam64_packet));
+      BPSK : zeroExtend(pack(bpsk_packet));
+      QPSK : zeroExtend(pack(qpsk_packet));
+    endcase;
+  endmethod
+endmodule
