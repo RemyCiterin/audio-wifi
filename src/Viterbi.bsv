@@ -9,12 +9,12 @@ export mkConvDecoder;
 
 interface ConvEncoder;
   method Action put(Maybe#(DataRate) rate, Bit#(24) bits);
-  method ActionValue#(Tuple2#(DataRate, Bit#(48))) get;
+  method ActionValue#(Bit#(48)) get;
 endinterface
 
 interface ConvDecoder;
   method Action put(Maybe#(DataRate) rate, Bit#(48) bits);
-  method ActionValue#(Tuple2#(DataRate, Bit#(24))) get;
+  method ActionValue#(Bit#(24)) get;
 endinterface
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -108,7 +108,7 @@ module mkConvEncoder(ConvEncoder);
     packet <= p;
   endmethod
 
-  method ActionValue#(Tuple2#(DataRate, Bit#(48))) get if (valid && index == 0);
+  method ActionValue#(Bit#(48)) get if (valid && index == 0);
     Bit#(48) ret;
 
     Bit#(6) st = state;
@@ -129,7 +129,7 @@ module mkConvEncoder(ConvEncoder);
 
     state <= st;
     valid <= False;
-    return tuple2(rate, ret);
+    return ret;
   endmethod
 endmodule
 
@@ -258,8 +258,8 @@ module mkConvDecoder(ConvDecoder);
     index <= 0;
   endmethod
 
-  method ActionValue#(Tuple2#(DataRate, Bit#(24))) get if (state == Done);
+  method ActionValue#(Bit#(24)) get if (state == Done);
     state <= Idle;
-    return tuple2(rate, ret);
+    return ret;
   endmethod
 endmodule

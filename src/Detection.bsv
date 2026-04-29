@@ -343,13 +343,95 @@ module mkSymbolPrinter(Put#(Symbol));
   endmethod
 endmodule
 
+typedef enum {
+  Idle,
+  DecodeData,
+  Rst
+} WifiDecoderState deriving(Bits, Eq);
+
+(* synthesize *)
+module mkWifiDecoder(Put#(Cmplx));
+  Synchronizer synchronizer <- mkSynchronizer;
+  FFT_IFC#(64) fft_64 <- mkStreamFFT64;
+  Equalisation equalisation <- mkFullEqualisation;
+  DeInterleaver deinterleaver <- mkDeInterleaver;
+  ConvDecoder convdecoder <- mkConvDecoder;
+  DeMapper demapper <- mkDeMapper;
+
+  Reg#(WifiDecoderState) state <- mkReg(Idle);
+
+  let printer <- mkSymbolPrinter;
+
+  // Number of allowed symbols from the synchronizer: initialy set to two: lts and header
+  Reg#(Bit#(32)) symbol_credits <- mkReg(48);
+  Reg#(Bit#(32)) byte_credits <- mkRegU;
+
+  // Rate of the currently demodulated data: initialy set to 6Mb/s : rate of the header encoding
+  Reg#(DataRate) rate <- mkReg(RATE_6MBPS);
+
+  rule rst if (state == Rst);
+    symbol_credits <= 48;
+    rate <= RATE_6MBPS;
+    state <= Idle;
+  endrule
+
+  rule synchronizer_to_fft if (symbol_credits > 0);
+    symbol_credits <= symbol_credits - fromInteger(data_bits_per_ofdm(rate));
+    let symbol <- synchronizer.get_ofdm_symbol;
+    fft_64.enq(symbol);
+  endrule
+
+  rule from_fft;
+    Symbol symbol = fft_64.response;
+    equalisation.put(symbol);
+    fft_64.deq;
+  endrule
+
+  rule from_equalisation;
+    Symbol symbol <- equalisation.get;
+    demapper.put(rate, symbol);
+
+    $display("=== frequencies ===");
+    printer.put(symbol);
+
+    for (Integer i=0; i < 64; i = i + 1) begin
+      draw_graph(pack(symbol[i].rel), pack(symbol[i].img), 65536*2, 65536*2);
+    end
+  endrule
+
+  rule from_demapper;
+    Bit#(288) packet <- demapper.get;
+    deinterleaver.put(rate, packet);
+  endrule
+
+  rule from_deinterleaver;
+    let bits <- deinterleaver.get;
+    convdecoder.put(Valid(rate), bits);
+  endrule
+
+  rule from_convdecoder;
+    let bits <- convdecoder.get;
+
+    if (state == Idle) begin
+      case (decodeHeader(truncate(bits))) matches
+        tagged Valid {.r, .l} : begin
+          symbol_credits <= 8 * zeroExtend(l);
+          byte_credits <= 8 * zeroExtend(l);
+          state <= DecodeData;
+        end
+
+        Invalid : state <= Rst;
+      endcase
+    end
+  endrule
+
+  method put = synchronizer.put_sample;
+endmodule
+
 (* synthesize *)
 module mkTestSynchronizer(Empty);
   RegFile#(Bit#(32), Fxpt) samples <- mkRegFileLoad("samples.hex", 0, 465000);
   Reg#(Bit#(32)) sample_num <- mkReg(0);
-
-  let synchronizer <- mkSynchronizer;
-  let fft_64 <- mkStreamFFT64;
 
   Reg#(Cmplx) signal <- mkReg(0);
   Get#(Cmplx) oscilator <- mkNumericOscilator(2000, 44100);
@@ -358,63 +440,7 @@ module mkTestSynchronizer(Empty);
 
   Reg#(Bit#(32)) symbol_num <- mkReg(0);
 
-  Equalisation equalisation <- mkFullEqualisation;
-  DeInterleaver deinterleaver <- mkDeInterleaver;
-  ConvDecoder convdecoder <- mkConvDecoder;
-
-  DeMapper demapper <- mkDeMapper;
-
-  let printer <- mkSymbolPrinter;
-
-  Reg#(Bool) isHeader <- mkReg(True);
-  Reg#(Maybe#(DataRate)) current_rate <- mkReg(Valid(RATE_6MBPS));
-
-  rule from_convdecoder;
-    match {.rate, .bits} <- convdecoder.get;
-    isHeader <= False;
-
-    for (Integer i=0; i < 24; i = i + 1) $write(bits[i]);
-    $display;
-
-    if (isHeader &&& decodeHeader(truncate(bits)) matches tagged Valid {.r, .l}) begin
-      $display("rate: ", fshow(r), " length: %d", l);
-      current_rate <= Valid(r);
-    end
-  endrule
-
-  rule from_deinterleaver;
-    match {.rate, .bits} <- deinterleaver.get;
-    convdecoder.put(Valid(rate), bits);
-  endrule
-
-  rule from_mapper;
-    Bit#(288) bits <- demapper.get;
-    deinterleaver.put(current_rate == Invalid ? RATE_6MBPS : validValue(current_rate), bits);
-  endrule
-
-  rule from_equalisation if (current_rate matches tagged Valid .rate);
-    Symbol freq <- equalisation.get;
-    symbol_num <= symbol_num + 1;
-    printer.put(freq);
-
-    if (isHeader) current_rate <= Invalid;
-    demapper.put(rate, freq);
-
-    for (Integer i=0; i < 64; i = i + 1) begin
-      draw_graph(pack(freq[i].rel), pack(freq[i].img), 65536*2, 65536*2);
-    end
-  endrule
-
-  rule from_fft;
-    Symbol freq = fft_64.response;
-    equalisation.put(freq);
-    fft_64.deq;
-  endrule
-
-  rule synchronizer_to_fft;
-    let symbol <- synchronizer.get_ofdm_symbol;
-    fft_64.enq(symbol);
-  endrule
+  let wifi_decoder <- mkWifiDecoder;
 
   mkAutoFSM(seq
       render_graph();
@@ -435,7 +461,7 @@ module mkTestSynchronizer(Empty);
         down_sampler <= down_sampler + 1 == 200 ? 0 : down_sampler + 1;
 
         if (down_sampler == 0) begin
-          synchronizer.put_sample(signal * cmplx(1/0.37,0));
+          wifi_decoder.put(signal * cmplx(1/0.37,0));
         end
       endaction
       render_graph();

@@ -9,12 +9,12 @@ export mkDeInterleaver;
 
 interface Interleaver;
   method Action put(DataRate rate, Bit#(48) packet);
-  method ActionValue#(Tuple2#(DataRate, Bit#(288))) get;
+  method ActionValue#(Bit#(288)) get;
 endinterface
 
 interface DeInterleaver;
   method Action put(DataRate rate, Bit#(288) packet);
-  method ActionValue#(Tuple2#(DataRate, Bit#(48))) get;
+  method ActionValue#(Bit#(48)) get;
 endinterface
 
 function Integer interleavePermutation(DataRate rate, Integer k);
@@ -49,10 +49,10 @@ module mkDeInterleaver(DeInterleaver);
   Reg#(DataRate) rate <- mkRegU;
   Reg#(Bit#(4)) index <- mkRegU;
 
-  function Bit#(288) deinterleave(DataRate rate, Bit#(288) packet);
+  function Bit#(288) deinterleave(DataRate r, Bit#(288) p);
     Bit#(288) new_packet = 0;
     for (Integer i=0; i < 288; i = i + 1)
-      new_packet[i] = packet[interleavePermutation(rate, i)];
+      new_packet[i] = p[interleavePermutation(r, i)];
     return new_packet;
   endfunction
 
@@ -76,7 +76,7 @@ module mkDeInterleaver(DeInterleaver);
     rate <= r;
   endmethod
 
-  method ActionValue#(Tuple2#(DataRate, Bit#(48))) get if (state == 2);
+  method ActionValue#(Bit#(48)) get if (state == 2);
     if (puncturing_from_rate(rate) == PUNCTURING_1_2) packet <= packet >> 48;
     if (puncturing_from_rate(rate) == PUNCTURING_2_3) packet <= packet >> 36;
     if (puncturing_from_rate(rate) == PUNCTURING_3_4) packet <= packet >> 32;
@@ -84,6 +84,6 @@ module mkDeInterleaver(DeInterleaver);
     if (index == 1) state <= 0;
     index <= index - 1;
 
-    return tuple2(rate, truncate(packet));
+    return truncate(packet);
   endmethod
 endmodule
