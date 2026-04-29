@@ -15,6 +15,8 @@ import CORDIC::*;
 
 import Equalisation::*;
 import Detection::*;
+import Interleaver::*;
+import Viterbi::*;
 
 import Mapper::*;
 

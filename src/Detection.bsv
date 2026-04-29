@@ -19,7 +19,9 @@ import FIFOF::*;
 import Real::*;
 
 import Equalisation::*;
-
+import Interleaver::*;
+import Viterbi::*;
+import Header::*;
 import Mapper::*;
 
 export Synchronizer(..);
@@ -233,8 +235,8 @@ module mkSynchronizer(Synchronizer);
       peak_detector[i] <= peak_detector[i+1];
     end
 
-    //color_graph(0, 0, 0);
-    //draw_graph(input_number, signExtend(pack(y_norm)), 456000/250, 65536*2);
+    color_graph(0, 0, 0);
+    draw_graph(input_number, signExtend(pack(y_norm)), 456000/200, 65536*2);
   endrule
 
   /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -357,15 +359,46 @@ module mkTestSynchronizer(Empty);
   Reg#(Bit#(32)) symbol_num <- mkReg(0);
 
   Equalisation equalisation <- mkFullEqualisation;
+  DeInterleaver deinterleaver <- mkDeInterleaver;
+  ConvDecoder convdecoder <- mkConvDecoder;
 
   DeMapper demapper <- mkDeMapper;
 
   let printer <- mkSymbolPrinter;
 
-  rule from_equalisation;
+  Reg#(Bool) isHeader <- mkReg(True);
+  Reg#(Maybe#(DataRate)) current_rate <- mkReg(Valid(RATE_6MBPS));
+
+  rule from_convdecoder;
+    match {.rate, .bits} <- convdecoder.get;
+    isHeader <= False;
+
+    for (Integer i=0; i < 24; i = i + 1) $write(bits[i]);
+    $display;
+
+    if (isHeader &&& decodeHeader(truncate(bits)) matches tagged Valid {.r, .l}) begin
+      $display("rate: ", fshow(r), " length: %d", l);
+      current_rate <= Valid(r);
+    end
+  endrule
+
+  rule from_deinterleaver;
+    match {.rate, .bits} <- deinterleaver.get;
+    convdecoder.put(Valid(rate), bits);
+  endrule
+
+  rule from_mapper;
+    Bit#(288) bits <- demapper.get;
+    deinterleaver.put(current_rate == Invalid ? RATE_6MBPS : validValue(current_rate), bits);
+  endrule
+
+  rule from_equalisation if (current_rate matches tagged Valid .rate);
     Symbol freq <- equalisation.get;
     symbol_num <= symbol_num + 1;
     printer.put(freq);
+
+    if (isHeader) current_rate <= Invalid;
+    demapper.put(rate, freq);
 
     for (Integer i=0; i < 64; i = i + 1) begin
       draw_graph(pack(freq[i].rel), pack(freq[i].img), 65536*2, 65536*2);
@@ -399,7 +432,7 @@ module mkTestSynchronizer(Empty);
         //color_graph(255, 0, 0);
         //draw_graph(sample_num, signExtend(pack(signal.img)), 456000, 65536*2);
 
-        down_sampler <= down_sampler + 1 == 250 ? 0 : down_sampler + 1;
+        down_sampler <= down_sampler + 1 == 200 ? 0 : down_sampler + 1;
 
         if (down_sampler == 0) begin
           synchronizer.put_sample(signal * cmplx(1/0.37,0));

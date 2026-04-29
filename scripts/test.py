@@ -71,7 +71,7 @@ parser.add_argument("--decode", action= "store_true")
 
 args = vars(parser.parse_args(sys.argv[1:]))
 
-Nrepeat = 250
+Nrepeat = 200
 sample_rate = 44100
 carrier_freq = 2000
 BACKMAN_SIZE = Nrepeat
@@ -107,8 +107,30 @@ if __name__ == "__main__" and args["encode"]:
             0x61, 0xda, 0x57, 0x99, 0xed
         ]
 
+    #message = b"""
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #Hello world!
+    #"""
+
     encoder = Encoder()
-    encoded_samples = encoder.run(constants.RATE_24MBPS, message)
+    encoded_samples = encoder.run(constants.RATE_18MBPS, message)
 
     samples = []
     for x in encoded_samples:
@@ -149,6 +171,7 @@ if __name__ == "__main__" and args["decode"]:
     #carrier_freq += 0.1
     samples = samples - samples.mean()
     samples = samples / np.sqrt(np.mean(samples**2))
+    samples = samples[len(samples)//10:]
 
     print(np.mean(np.abs(samples)))
     #file = open("samples.hex", "w")
@@ -286,6 +309,8 @@ if __name__ == "__main__" and args["decode"]:
 
     header = demapper.run(constants.RATE_6MBPS, header_freq)
     header = deinterleaver.run(constants.RATE_6MBPS, header)
+    print("header: ", format_bits(header))
+    assert(False)
     header = viterbi.run(constants.RATE_6MBPS, header)
     (length, rate) = from_header(header)
     print("length: {} rate: {:b}".format(length, rate))

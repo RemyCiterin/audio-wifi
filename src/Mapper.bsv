@@ -184,6 +184,7 @@ module mkDeMapper(DeMapper);
     Vector#(48,Bit#(2)) qpsk_packet = replicate(0);
     Vector#(48,Bit#(4)) qam16_packet = replicate(0);
     Vector#(48,Bit#(6)) qam64_packet = replicate(0);
+    valid <= False;
 
     for (Integer i=0; i < 48; i = i + 1) begin
       Cmplx subcarrier = symbol[positions[i]];
