@@ -23,6 +23,7 @@ import Interleaver::*;
 import Viterbi::*;
 import Header::*;
 import Mapper::*;
+import Scrambler::*;
 
 export Synchronizer(..);
 export mkSynchronizer;
@@ -355,21 +356,26 @@ module mkWifiDecoder(Put#(Cmplx));
   FFT_IFC#(64) fft_64 <- mkStreamFFT64;
   Equalisation equalisation <- mkFullEqualisation;
   DeInterleaver deinterleaver <- mkDeInterleaver;
+  Reg#(Bool) first_decoded <- mkReg(True);
   ConvDecoder convdecoder <- mkConvDecoder;
   DeMapper demapper <- mkDeMapper;
+  Reg#(Bool) first_descrambled <- mkReg(True);
+  DeScrambler descrambler <- mkDeScrambler;
 
   Reg#(WifiDecoderState) state <- mkReg(Idle);
 
   let printer <- mkSymbolPrinter;
 
   // Number of allowed symbols from the synchronizer: initialy set to two: lts and header
-  Reg#(Bit#(32)) symbol_credits <- mkReg(48);
-  Reg#(Bit#(32)) byte_credits <- mkRegU;
+  Reg#(Int#(32)) symbol_credits <- mkReg(48);
+  Reg#(Int#(32)) byte_credits <- mkRegU;
 
   // Rate of the currently demodulated data: initialy set to 6Mb/s : rate of the header encoding
   Reg#(DataRate) rate <- mkReg(RATE_6MBPS);
 
   rule rst if (state == Rst);
+    first_descrambled <= False;
+    first_decoded <= True;
     symbol_credits <= 48;
     rate <= RATE_6MBPS;
     state <= Idle;
@@ -389,9 +395,9 @@ module mkWifiDecoder(Put#(Cmplx));
 
   rule from_equalisation;
     Symbol symbol <- equalisation.get;
+    $display("send to demapper with rate: %b", rate);
     demapper.put(rate, symbol);
 
-    $display("=== frequencies ===");
     printer.put(symbol);
 
     for (Integer i=0; i < 64; i = i + 1) begin
@@ -406,23 +412,45 @@ module mkWifiDecoder(Put#(Cmplx));
 
   rule from_deinterleaver;
     let bits <- deinterleaver.get;
-    convdecoder.put(Valid(rate), bits);
+    convdecoder.put(first_decoded ? Valid(rate) : Invalid, bits);
+    first_decoded <= False;
   endrule
 
   rule from_convdecoder;
     let bits <- convdecoder.get;
 
+    $write("decoded: ");
+    for (Integer i=0; i < 24; i = i + 1) begin
+      $write("%b", bits[i]);
+    end
+
+    $display;
+
     if (state == Idle) begin
       case (decodeHeader(truncate(bits))) matches
         tagged Valid {.r, .l} : begin
-          symbol_credits <= 8 * zeroExtend(l);
-          byte_credits <= 8 * zeroExtend(l);
+          symbol_credits <= 24 + 8 * unpack(zeroExtend(l));
+          byte_credits <= 24 + 8 * unpack(zeroExtend(l));
+          first_decoded <= True;
           state <= DecodeData;
+          rate <= r;
         end
 
         Invalid : state <= Rst;
       endcase
     end
+
+    if (state == DecodeData) begin
+      descrambler.put(first_descrambled, bits);
+      first_descrambled <= False;
+    end
+  endrule
+
+  rule from_scrambler;
+    let bits <- descrambler.get;
+    first_descrambled <= False;
+
+    $display("data: %c%c%c", bits[7:0], bits[15:8], bits[23:16]);
   endrule
 
   method put = synchronizer.put_sample;

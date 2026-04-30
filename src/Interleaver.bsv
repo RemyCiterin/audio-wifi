@@ -81,6 +81,7 @@ module mkDeInterleaver(DeInterleaver);
     if (puncturing_from_rate(rate) == PUNCTURING_2_3) packet <= packet >> 36;
     if (puncturing_from_rate(rate) == PUNCTURING_3_4) packet <= packet >> 32;
 
+    $display("index: ", index);
     if (index == 1) state <= 0;
     index <= index - 1;
 

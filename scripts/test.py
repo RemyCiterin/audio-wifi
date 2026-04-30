@@ -310,7 +310,6 @@ if __name__ == "__main__" and args["decode"]:
     header = demapper.run(constants.RATE_6MBPS, header_freq)
     header = deinterleaver.run(constants.RATE_6MBPS, header)
     print("header: ", format_bits(header))
-    assert(False)
     header = viterbi.run(constants.RATE_6MBPS, header)
     (length, rate) = from_header(header)
     print("length: {} rate: {:b}".format(length, rate))
@@ -338,6 +337,8 @@ if __name__ == "__main__" and args["decode"]:
         for j in range(len(data) // batch_size):
             x = data[j*batch_size:(j+1)*batch_size]
             x = viterbi.run(rate if i == 0 and j == 0 else None, x)
+            print("decoded: ", format_bits(x))
+            #assert(False)
             x = descrambler.run(i == 0 and j == 0, x)
             print(format_bits(x))
 

@@ -1,51 +1,72 @@
-interface Scrambler#(numeric type n);
-  (* always_ready *)
-  method Bool canEnq;
-  method Action enq(Bit#(n) in);
+typedef Bit#(7) State;
 
-  (* always_ready *)
-  method Bool valid;
-  method Action deq;
-  method Bit#(n) response;
+typedef 24 DATA_WIDTH;
+typedef Bit#(DATA_WIDTH) Data;
+
+interface Scrambler;
+  method Action put(Data in);
+  method ActionValue#(Data) get;
 endinterface
 
-module mkScrambler(Scrambler#(n));
-  Reg#(Bool) idle[2] <- mkCReg(2, True);
-  Reg#(Bit#(n)) data <- mkRegU;
-
-  Reg#(Bit#(7)) state <- mkReg('b1111111);
-
-  Bit#(n) out = data;
-  Bit#(7) st = state;
-
+function Tuple2#(Bit#(n), State) transitions(State state, Bit#(n) data);
   for (Integer i=0; i < valueof(n); i = i + 1) begin
-    Bit#(1) x = st[0] ^ st[3];
-    st = {x, truncateLSB(st)};
-    out[i] = out[i] ^ x;
+    Bit#(1) x = state[0] ^ state[3];
+    state = {x, truncateLSB(state)};
+    data[i] = data[i] ^ x;
   end
 
-  method canEnq = idle[1];
-  method Action enq(Bit#(n) in) if (idle[1]);
-    idle[1] <= False;
+  return tuple2(data, state);
+endfunction
+
+(* synthesize *)
+module mkScrambler(Scrambler);
+  Reg#(Bool) valid <- mkReg(False);
+  Reg#(Data) data <- mkRegU;
+
+  Reg#(State) state <- mkReg('b1111111);
+
+  method Action put(Data in) if (!valid);
+    valid <= True;
     data <= in;
   endmethod
 
-  method valid = !idle[0];
-  method response;
-    Bit#(n) out = data;
-    Bit#(7) st = state;
-
-    for (Integer i=0; i < valueof(n); i = i + 1) begin
-      Bit#(1) x = st[0] ^ st[3];
-      st = {x, truncateLSB(st)};
-      out[i] = out[i] ^ x;
-    end
-
+  method ActionValue#(Data) get if (valid);
+    match {.out, .new_state} = transitions(state, data);
+    state <= new_state;
+    valid <= False;
     return out;
   endmethod
+endmodule
 
-  method Action deq;
-    idle[0] <= True;
-    state <= st;
+interface DeScrambler;
+  method Action put(Bool rst, Data bits);
+  method ActionValue#(Data) get;
+endinterface
+
+(* synthesize *)
+module mkDeScrambler(DeScrambler);
+  Reg#(Bool) valid <- mkReg(False);
+  Reg#(Data) data <- mkRegU;
+  Reg#(Bool) rst <- mkRegU;
+
+  Reg#(State) state <- mkReg('1);
+
+  // Search the states of the scrambling FSM in (up-to) 127 cycles
+  rule search if (valid && rst);
+    if (transitions(state, data[6:0]).fst == 0) rst <= False;
+    else state <= transitions(state, 1'b0).snd;
+  endrule
+
+  method Action put(Bool r, Data d) if (!valid);
+    valid <= True;
+    data <= d;
+    rst <= r;
+  endmethod
+
+  method ActionValue#(Data) get if (valid && !rst);
+    match {.out, .new_state} = transitions(state, data);
+    state <= new_state;
+    valid <= False;
+    return out;
   endmethod
 endmodule
