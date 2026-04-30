@@ -12,6 +12,7 @@ import CORDIC::*;
 import FFT::*;
 
 import SpecialFIFOs::*;
+import BuildVector::*;
 import BRAMCore::*;
 import StmtFSM::*;
 import RegFile::*;
@@ -279,8 +280,8 @@ module mkSynchronizer(Synchronizer);
     deq_input_samples;
 
     if (lts_delay == 0) begin
-      $display("correlator output at time %d is %d", input_number, correlator.result);
-      $display("view symbol at number: %d", input_number);
+      //$display("correlator output at time %d is %d", input_number, correlator.result);
+      //$display("view symbol at number: %d", input_number);
       Vector#(64, Cmplx) out = newVector;
       for (Integer i=0; i < 64; i = i + 1) begin
         out[i] = input_buffer[63 - i];
@@ -350,8 +351,13 @@ typedef enum {
   Rst
 } WifiDecoderState deriving(Bits, Eq);
 
+interface WifiDecoder;
+  method Action put(Cmplx sample);
+  method ActionValue#(Tuple4#(DataRate, Length, Bit#(8), Bool)) get;
+endinterface
+
 (* synthesize *)
-module mkWifiDecoder(Put#(Cmplx));
+module mkWifiDecoder(WifiDecoder);
   Synchronizer synchronizer <- mkSynchronizer;
   FFT_IFC#(64) fft_64 <- mkStreamFFT64;
   Equalisation equalisation <- mkFullEqualisation;
@@ -364,25 +370,36 @@ module mkWifiDecoder(Put#(Cmplx));
 
   Reg#(WifiDecoderState) state <- mkReg(Idle);
 
+  Reg#(Vector#(3, Maybe#(Bit#(8)))) output_buffer <- mkReg(replicate(Invalid));
+
   let printer <- mkSymbolPrinter;
 
   // Number of allowed symbols from the synchronizer: initialy set to two: lts and header
   Reg#(Int#(32)) symbol_credits <- mkReg(48);
-  Reg#(Int#(32)) byte_credits <- mkRegU;
+  Reg#(Int#(32)) output_credits <- mkReg(0);
+  Reg#(Bit#(32)) service_length <- mkRegU;
+  Reg#(Bit#(32)) output_length <- mkRegU;
 
   // Rate of the currently demodulated data: initialy set to 6Mb/s : rate of the header encoding
   Reg#(DataRate) rate <- mkReg(RATE_6MBPS);
+  Reg#(Length) length <- mkRegU;
 
   rule rst if (state == Rst);
-    first_descrambled <= False;
+    $display("DO RESET");
+    synchronizer.back_to_idle;
+    output_buffer <= replicate(Invalid);
+    first_descrambled <= True;
     first_decoded <= True;
     symbol_credits <= 48;
+    output_credits <= 0;
     rate <= RATE_6MBPS;
+    equalisation.rst;
     state <= Idle;
   endrule
 
   rule synchronizer_to_fft if (symbol_credits > 0);
     symbol_credits <= symbol_credits - fromInteger(data_bits_per_ofdm(rate));
+    output_credits <= output_credits + fromInteger(data_bits_per_ofdm(rate));
     let symbol <- synchronizer.get_ofdm_symbol;
     fft_64.enq(symbol);
   endrule
@@ -395,11 +412,9 @@ module mkWifiDecoder(Put#(Cmplx));
 
   rule from_equalisation;
     Symbol symbol <- equalisation.get;
-    $display("send to demapper with rate: %b", rate);
     demapper.put(rate, symbol);
 
-    printer.put(symbol);
-
+    //printer.put(symbol);
     for (Integer i=0; i < 64; i = i + 1) begin
       draw_graph(pack(symbol[i].rel), pack(symbol[i].img), 65536*2, 65536*2);
     end
@@ -419,20 +434,16 @@ module mkWifiDecoder(Put#(Cmplx));
   rule from_convdecoder;
     let bits <- convdecoder.get;
 
-    $write("decoded: ");
-    for (Integer i=0; i < 24; i = i + 1) begin
-      $write("%b", bits[i]);
-    end
-
-    $display;
-
     if (state == Idle) begin
       case (decodeHeader(truncate(bits))) matches
         tagged Valid {.r, .l} : begin
           symbol_credits <= 24 + 8 * unpack(zeroExtend(l));
-          byte_credits <= 24 + 8 * unpack(zeroExtend(l));
+          output_length <= 8 * zeroExtend(l);
           first_decoded <= True;
+          service_length <= 16;
           state <= DecodeData;
+          output_credits <= 0;
+          length <= l;
           rate <= r;
         end
 
@@ -446,19 +457,45 @@ module mkWifiDecoder(Put#(Cmplx));
     end
   endrule
 
-  rule from_scrambler;
+  rule from_scrambler if (output_buffer == replicate(Invalid));
     let bits <- descrambler.get;
-    first_descrambled <= False;
-
-    $display("data: %c%c%c", bits[7:0], bits[15:8], bits[23:16]);
+    output_buffer <= vec(Valid(bits[7:0]), Valid(bits[15:8]), Valid(bits[23:16]));
   endrule
+
+  Action consume_output = action
+    output_buffer <= Vector::rotate(Vector::update(output_buffer, 0, Invalid));
+  endaction;
+
+  rule read_service_field if (isValid(output_buffer[0]) && service_length > 0);
+    output_buffer <= Vector::rotate(Vector::update(output_buffer, 0, Invalid));
+    output_credits <= output_credits - 8;
+    service_length <= service_length - 8;
+  endrule
+
+  rule from_padding if (isValid(output_buffer[0]) && service_length == 0 && output_length == 0);
+    output_buffer <= Vector::rotate(Vector::update(output_buffer, 0, Invalid));
+    output_credits <= output_credits - 8;
+
+    if (output_credits <= 8 && symbol_credits <= 0) begin
+      state <= Rst;
+    end
+  endrule
+
+  method ActionValue#(Tuple4#(DataRate, Length, Bit#(8), Bool)) get
+    if (isValid(output_buffer[0]) && service_length == 0 && output_length > 0);
+    output_buffer <= Vector::rotate(Vector::update(output_buffer, 0, Invalid));
+    output_credits <= output_credits - 8;
+    output_length <= output_length - 8;
+
+    return tuple4(rate, length, validValue(output_buffer[0]), output_length == 8);
+  endmethod
 
   method put = synchronizer.put_sample;
 endmodule
 
 (* synthesize *)
 module mkTestSynchronizer(Empty);
-  RegFile#(Bit#(32), Fxpt) samples <- mkRegFileLoad("samples.hex", 0, 465000);
+  RegFile#(Bit#(32), Fxpt) samples <- mkRegFileLoad("samples.hex", 0, 941000);
   Reg#(Bit#(32)) sample_num <- mkReg(0);
 
   Reg#(Cmplx) signal <- mkReg(0);
@@ -470,9 +507,21 @@ module mkTestSynchronizer(Empty);
 
   let wifi_decoder <- mkWifiDecoder;
 
+  Reg#(Bool) first <- mkReg(True);
+  rule get_byte;
+    match {.rate, .length, .data, .last} <- wifi_decoder.get;
+    first <= last;
+
+    if (first) begin
+      $display("receive message of length: %0d using rate %b", length, rate);
+    end
+
+    $write("%c", data);
+  endrule
+
   mkAutoFSM(seq
       render_graph();
-      while (sample_num < 465000) action
+      while (sample_num < 941000) action
         Fxpt sample = samples.sub(sample_num);
         sample_num <= sample_num + 1;
 
