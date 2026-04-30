@@ -6,7 +6,7 @@ to work with audio samples instead of RF (mostly for fun).
 # Features
 
 - Multiple choice of FFT implementations, the one by default is a radix-2 SDF-FFT.
-- Support of all the many data rates: 6, 12, 18, 24, 36, 48, 54Mb/s. Only 9Mb/s is not supported
+- Support of many data rates: 6, 12, 18, 24, 36, 48, 54Mb/s. Only 9Mb/s is not supported
     because it require to split packets of 24-bits in multiple OFDM symbols but this one is otional
     in the specification.
 
