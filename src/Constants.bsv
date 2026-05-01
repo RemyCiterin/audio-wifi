@@ -4,7 +4,10 @@ import Vector::*;
 
 typedef 64 FFT_SIZE;
 
-typedef FixedPoint#(16,16) Fxpt;
+typedef 16 FXPT_INT;
+typedef 16 FXPT_FRAC;
+typedef TAdd#(FXPT_INT,FXPT_FRAC) FXPT_WIDTH;
+typedef FixedPoint#(FXPT_INT,FXPT_FRAC) Fxpt;
 typedef Complex#(Fxpt) Cmplx;
 
 typedef Vector#(FFT_SIZE, Cmplx) Symbol;

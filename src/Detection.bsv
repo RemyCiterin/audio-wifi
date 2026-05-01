@@ -122,6 +122,63 @@ module mkLtsCorrelator(LtsCorrelator);
     signExtend(pack(img_buffer[63])) * signExtend(pack(img_buffer[63]));
 endmodule
 
+interface StsCorrelator;
+  method Action push(Cmplx sample);
+  (* always_ready *) method Cmplx score_y;
+  (* always_ready *) method Fxpt score_z;
+endinterface
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+// Schmidl & Cox algorithm based coarse synchronization:
+//
+// The short training symbol is a symbol of 16 samples repeated 10 times, so the algorithm work by
+// computing the correlation between `X(t-16*9...t)` and `X(t-16*10...t-16)`. Each times we see
+// a peak of this metric we known that we observed such a symbol during the previous 160 samples.
+//
+// Let `Y(t)` be `X(t) * X(t-16).conjugate()`, I compute this correlation by accumulating the sum
+// of the last 144=16*9 values of `Y` using a shift register.
+//
+// In addition I compute the sum of the norm of the last 144*16*9 samples and compare the previous
+// metric: if the ratio of the previous metric by this norm is too low, this means that I'am just
+// looking at noise currently.
+/////////////////////////////////////////////////////////////////////////////////////////////////
+(* synthesize *)
+module mkStsCorrelator(StsCorrelator);
+  Reg#(Cmplx) accumulator_y <- mkReg(0);
+  Reg#(Fxpt) accumulator_z <- mkReg(0);
+  ShiftReg#(Cmplx) buffer_x_16 <- mkShiftReg(16, constFn(0));
+  ShiftReg#(Fxpt) buffer_z_144 <- mkShiftReg(16*9, constFn(0));
+  ShiftReg#(Cmplx) buffer_y_144 <- mkShiftReg(16*9, constFn(0));
+  Reg#(Cmplx) last_sample <- mkReg(0);
+
+  // Compute X(t) and X(t-16)
+  Cmplx x_t = last_sample;
+  Cmplx x_tm16 = buffer_x_16.first;
+
+  // Compute Y(t) and Y(t-16*9)
+  Cmplx y_tm144 = buffer_y_144.first;
+  Cmplx y_t = x_t * cmplxConj(x_tm16);
+
+  // Compute Z(t) and Z(t-16*9)
+  Fxpt z_tm144 = buffer_z_144.first;
+  Fxpt z_t = (x_t * cmplxConj(x_t)).rel;
+
+  method Action push(Cmplx sample);
+    // Update integral computations
+    accumulator_z <= accumulator_z + z_t - z_tm144;
+    accumulator_y <= accumulator_y + y_t - y_tm144;
+
+    // Update the shift registers
+    buffer_z_144.push(z_t);
+    buffer_y_144.push(y_t);
+    buffer_x_16.push(x_t);
+    last_sample <= sample;
+  endmethod
+
+  method Cmplx score_y = accumulator_y;
+  method Fxpt score_z = accumulator_z;
+endmodule
+
 interface Synchronizer;
   // Send a new sample to the synchronizer
   method Action put_sample(Cmplx sample);
@@ -139,9 +196,17 @@ typedef enum {
   Lts
 } Synchronizer_State deriving(Bits, Eq, FShow);
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Detect the begining of a frame using two correlation alsorithms based on the training sequences,
+// this module can accept samples (as long as it's internal buffer are not full). Then when it
+// found a wifi frame, it can forward the symbols to the rest of the decoder starting from the
+// second long training symbol (such that it can be used for channel estimation) up to a
+// `back_to_idle` signal indicating the end of the frame.
+///////////////////////////////////////////////////////////////////////////////////////////////////
 (* synthesize *)
 module mkSynchronizer(Synchronizer);
-  LtsCorrelator correlator <- mkLtsCorrelator;
+  LtsCorrelator lts_correlator <- mkLtsCorrelator;
+  StsCorrelator sts_correlator <- mkStsCorrelator;
 
   // use a sized fifo because some computations (like cordic can take time)
   FIFOF#(Cmplx) input_samples <- mkSizedFIFOF(128);
@@ -158,7 +223,8 @@ module mkSynchronizer(Synchronizer);
   end
 
   Action deq_input_samples = action
-    correlator.push(input_samples.first);
+    sts_correlator.push(input_samples.first);
+    lts_correlator.push(input_samples.first);
     input_buffer[0] <= input_samples.first;
     for (Integer i=1; i < input_buffer_length; i = i + 1) input_buffer[i] <= input_buffer[i-1];
     input_number <= input_number + 1;
@@ -170,22 +236,8 @@ module mkSynchronizer(Synchronizer);
   /////////////////////////////////////////////////////////////////////////////////////////////////
   // Schmidl & Cox algorithm based coarse synchronization:
   //
-  // The short training symbol is a symbol of 16 samples repeated 10 times, so the algorithm work by
-  // computing the correlation between `X(t-16*9...t)` and `X(t-16*10...t-16)`. Each times we see
-  // a peak of this metric we known that we observed such a symbol during the previous 160 samples.
-  //
-  // Let `Y(t)` be `X(t) * X(t-16).conjugate()`, I compute this correlation by accumulating the sum
-  // of the last 144=16*9 values of `Y` using a shift register.
-  //
-  // In addition I compute the sum of the norm of the last 144*16*9 samples and compare the previous
-  // metric: if the ratio of the previous metric by this norm is too low, this means that I'am just
-  // looking at noise currently.
+  // Use the signals given by the sts correlator to find the end of the short training symbols.
   /////////////////////////////////////////////////////////////////////////////////////////////////
-  Reg#(Cmplx) accumulator_y <- mkReg(0);
-  Reg#(Fxpt) accumulator_z <- mkReg(0);
-  ShiftReg#(Cmplx) buffer_x_16 <- mkShiftReg(16, constFn(0));
-  ShiftReg#(Fxpt) buffer_z_144 <- mkShiftReg(16*9, constFn(0));
-  ShiftReg#(Cmplx) buffer_y_144 <- mkShiftReg(16*9, constFn(0));
   Fxpt y_z_threshold = 0.4;
 
   Integer peak_length = 8;
@@ -193,29 +245,11 @@ module mkSynchronizer(Synchronizer);
   for (Integer i=0; i < peak_length*2+1; i = i + 1) peak_detector[i] <- mkReg(0);
 
   rule schmidl_cox_rl if (state == Idle);
-    // Compute X(t) and X(t-16)
-    Cmplx x_t = input_buffer[0];
-    Cmplx x_tm16 = buffer_x_16.first;
     deq_input_samples;
 
-    // Compute Y(t) and Y(t-16*9)
-    Cmplx y_tm144 = buffer_y_144.first;
-    Cmplx y_t = x_t * cmplxConj(x_tm16);
-    accumulator_y <= accumulator_y + y_t - y_tm144;
-
-    // Compute Z(t) and Z(t-16*9)
-    Fxpt z_tm144 = buffer_z_144.first;
-    Fxpt z_t = (x_t * cmplxConj(x_t)).rel;
-    accumulator_z <= accumulator_z + z_t - z_tm144;
-
-    // Update the shift registers
-    buffer_z_144.push(z_t);
-    buffer_y_144.push(y_t);
-    buffer_x_16.push(x_t);
-
     // Compute the norm of sum Y(t) and sum Z(t) for peak detection
-    Fxpt z_norm = accumulator_z * accumulator_z;
-    Fxpt y_norm = (accumulator_y * cmplxConj(accumulator_y)).rel;
+    Fxpt z_norm = sts_correlator.score_z * sts_correlator.score_z;
+    Fxpt y_norm = (sts_correlator.score_y * cmplxConj(sts_correlator.score_y)).rel;
 
     // Compare the power of Y and Z: low power peaks are not considered valids
     if (y_norm > z_norm * y_z_threshold) begin
@@ -237,8 +271,12 @@ module mkSynchronizer(Synchronizer);
       peak_detector[i] <= peak_detector[i+1];
     end
 
+    //$write("samples[%0d] = ", input_number);
+    //fxptWrite(8, y_norm);
+    //$display;
+
     color_graph(0, 0, 0);
-    draw_graph(input_number, signExtend(pack(y_norm)), 456000/200, 65536*2);
+    draw_graph(input_number, signExtend(pack(y_norm)), 1000000/200, 65536*32);
   endrule
 
   /////////////////////////////////////////////////////////////////////////////////////////////////
@@ -256,10 +294,10 @@ module mkSynchronizer(Synchronizer);
   rule lts_sync if (state == WaitForLts);
     deq_input_samples;
 
-    $display("correlation at time %d is %d", input_number, correlator.result);
+    $display("correlation at time %d is %d", input_number, lts_correlator.result);
 
-    if (correlator.result > best_correlation) begin
-      best_correlation <= correlator.result;
+    if (lts_correlator.result > best_correlation) begin
+      best_correlation <= lts_correlator.result;
       best_correlation_delay <= lts_delay;
     end
 
@@ -280,7 +318,7 @@ module mkSynchronizer(Synchronizer);
     deq_input_samples;
 
     if (lts_delay == 0) begin
-      //$display("correlator output at time %d is %d", input_number, correlator.result);
+      //$display("lts_correlator output at time %d is %d", input_number, lts_correlator.result);
       //$display("view symbol at number: %d", input_number);
       Vector#(64, Cmplx) out = newVector;
       for (Integer i=0; i < 64; i = i + 1) begin
@@ -415,9 +453,9 @@ module mkWifiDecoder(WifiDecoder);
     demapper.put(rate, symbol);
 
     //printer.put(symbol);
-    for (Integer i=0; i < 64; i = i + 1) begin
-      draw_graph(pack(symbol[i].rel), pack(symbol[i].img), 65536*2, 65536*2);
-    end
+    //for (Integer i=0; i < 64; i = i + 1) begin
+    //  draw_graph(pack(symbol[i].rel), pack(symbol[i].img), 65536*2, 65536*2);
+    //end
   endrule
 
   rule from_demapper;
@@ -495,10 +533,16 @@ endmodule
 
 (* synthesize *)
 module mkTestSynchronizer(Empty);
-  RegFile#(Bit#(32), Fxpt) samples <- mkRegFileLoad("samples.hex", 0, 941000);
+  function Fxpt intToFxpt(Int#(32) x);
+    Integer lsb_index = 16 - valueof(FXPT_FRAC);
+    Integer msb_index = lsb_index + valueof(FXPT_WIDTH) - 1;
+    return unpack(pack(x)[msb_index:lsb_index]);
+  endfunction
+
+  RegFile#(Bit#(32), Int#(32)) samples <- mkRegFileLoad("samples.hex", 0, 941000);
   Reg#(Bit#(32)) sample_num <- mkReg(0);
 
-  Reg#(Cmplx) signal <- mkReg(0);
+  Reg#(Complex#(FixedPoint#(16,16))) signal <- mkReg(0);
   Get#(Cmplx) oscilator <- mkNumericOscilator(2000, 44100);
 
   Reg#(Bit#(32)) down_sampler <- mkReg(0);
@@ -522,13 +566,23 @@ module mkTestSynchronizer(Empty);
   mkAutoFSM(seq
       render_graph();
       while (sample_num < 941000) action
-        Fxpt sample = samples.sub(sample_num);
+        Fxpt sample = intToFxpt(samples.sub(sample_num));
         sample_num <= sample_num + 1;
 
-        Fxpt alpha = 0.005;
+        // TODO: improve low-pass-filter
+        FixedPoint#(16,16) alpha = 0.005;
         Cmplx carrier_approx <- oscilator.get;
         Cmplx x = cmplx(sample, 0) * carrier_approx;
-        signal <= signal * cmplx(1-alpha,0) + cmplx(alpha,0) * x;
+
+        let y = cmplx(
+          fxptAdd(fxptMult(1-alpha, signal.rel), fxptMult(alpha, x.rel)),
+          fxptAdd(fxptMult(1-alpha, signal.img), fxptMult(alpha, x.img))
+        );
+
+        signal <= cmplx(
+          fxptTruncateRoundSat(Rnd_Zero, Sat_Bound, y.rel),
+          fxptTruncateRoundSat(Rnd_Zero, Sat_Bound, y.img)
+        );
 
         //color_graph(0, 0, 255);
         //draw_graph(sample_num, signExtend(pack(signal.rel)), 456000, 65536*2);
@@ -538,7 +592,10 @@ module mkTestSynchronizer(Empty);
         down_sampler <= down_sampler + 1 == 200 ? 0 : down_sampler + 1;
 
         if (down_sampler == 0) begin
-          wifi_decoder.put(signal * cmplx(1/0.37,0));
+          wifi_decoder.put(cmplx(
+            fxptTruncateRoundSat(Rnd_Zero, Sat_Bound, signal.rel),
+            fxptTruncateRoundSat(Rnd_Zero, Sat_Bound, signal.img)
+          ));
         end
       endaction
       render_graph();
